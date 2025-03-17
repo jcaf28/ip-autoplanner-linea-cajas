@@ -197,7 +197,6 @@ def restriccion_capacidad_zonas(modelo, df_tareas, start, end):
         modelo += start[(mj, tj)] >= end[(mi, ti)] - M * (1 - order[(mi, ti, mj, tj)])
         modelo += start[(mi, ti)] >= end[(mj, tj)] - M * order[(mi, ti, mj, tj)]
 
-
 def restriccion_operarios(modelo, df_tareas, df_calend, start, end):
     """
     Limitamos el número de operarios disponibles en cada turno según el calendario.
@@ -241,7 +240,6 @@ def restriccion_operarios(modelo, df_tareas, df_calend, start, end):
                 modelo += start[(mat, t_id)] >= ts_ini - M * (1 - uso_operarios[(mat, t_id, ts_ini)])
                 modelo += end[(mat, t_id)] <= ts_fin + M * (1 - uso_operarios[(mat, t_id, ts_ini)])
 
-
 # -----------------------------------------------------------------------
 # 3) CREAR Y RESOLVER EL MODELO
 # -----------------------------------------------------------------------
@@ -284,7 +282,6 @@ def armar_modelo(datos):
     modelo += pulp.lpSum(retraso.values()), "Minimize_Total_Tardiness"
 
     return modelo, start, end, retraso
-
 
 def resolver_modelo(modelo):
     modelo.solve(pulp.PULP_CBC_CMD(msg=0))
@@ -343,7 +340,6 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas):
 
     # Llamar a la función plot_gantt pasando df_entregas
     plot_gantt(df_sol, df_entregas)
-
 
 
 # -----------------------------------------------------------------------
