@@ -1,96 +1,100 @@
 import plotly.express as px
-import plotly.figure_factory as ff
 import pandas as pd
+import datetime
 
 def plot_gantt(df_sol, df_entregas, df_calend):
+    # --- 1) TAREAS
     tareas = []
-    
-    # tareas normales
     for _, row in df_sol.iterrows():
         tareas.append(dict(
-            Task=row["ubicacion"],
+            Task=f"{row['ubicacion']} (T{row['tarea']})",
             Start=row["datetime_inicio"],
             Finish=row["datetime_fin"],
-            Resource=row["pedido"],
-            Descripcion=(
-                f"[Tarea: T{row['tarea']}]<br>"
-                f"Pedido: {row['pedido']}<br>"
-                f"Ubicación: {row['ubicacion']}<br>"
-                f"Inicio: {row['datetime_inicio']}<br>"
-                f"Fin: {row['datetime_fin']}<br>"
-                f"Operarios: {row['operarios_asignados']}"
-            )
+            Pedido=row["pedido"],
+            Operarios=row["operarios_asignados"],
+            Ubicacion=row["ubicacion"],
+            Tipo="Tarea"
         ))
 
-    # recepciones y entregas
+    df_tareas = pd.DataFrame(tareas)
+
+    # --- 2) LÍNEAS DE RECEPCIÓN/ENTREGA
+    # Convertir a str ISO para Plotly
+    lineas = []
     for _, row in df_entregas.iterrows():
-        tareas.append(dict(
-            Task="Recepción materiales",
-            Start=row["fecha_recepcion_materiales"],
-            Finish=row["fecha_recepcion_materiales"],
-            Resource=row["referencia"],
-            Descripcion=f"Recepción Pedido: {row['referencia']}<br>Fecha: {row['fecha_recepcion_materiales']}"
-        ))
-        tareas.append(dict(
-            Task="Entrega cliente",
-            Start=row["fecha_entrega"],
-            Finish=row["fecha_entrega"],
-            Resource=row["referencia"],
-            Descripcion=f"Entrega Pedido: {row['referencia']}<br>Fecha: {row['fecha_entrega']}"
-        ))
+        fecha_rec = pd.to_datetime(row["fecha_recepcion_materiales"]).isoformat()
+        fecha_ent = pd.to_datetime(row["fecha_entrega"]).isoformat()
+        pedido = row["referencia"]
 
-    df_plot = pd.DataFrame(tareas)
+        lineas.append(dict(Task="Recepción", Fecha=fecha_rec, Pedido=pedido, Tipo="Recepción"))
+        lineas.append(dict(Task="Entrega",   Fecha=fecha_ent, Pedido=pedido, Tipo="Entrega"))
 
-    # colores alternados por pedido
+    df_lineas = pd.DataFrame(lineas)
+
+    # --- 3) Colores
     colores = px.colors.qualitative.Pastel
-    pedidos = df_plot["Resource"].unique()
+    pedidos = df_tareas["Pedido"].unique()
     color_map = {pedido: colores[i % len(colores)] for i, pedido in enumerate(pedidos)}
 
-    fig = ff.create_gantt(
-        df_plot,
-        index_col='Resource',
-        colors=color_map,
-        show_colorbar=True,
-        group_tasks=True,
-        title="Diagrama de Gantt - Planificación de Producción",
-        bar_width=0.2,
-        showgrid_x=True,
-        showgrid_y=True
+    # --- 4) Gantt principal con Plotly Express
+    fig = px.timeline(
+        df_tareas,
+        x_start="Start",
+        x_end="Finish",
+        y="Task",
+        color="Pedido",
+        color_discrete_map=color_map,
+        hover_data=["Pedido", "Operarios", "Ubicacion"],
+        title="Diagrama de Gantt - Planificación de Producción"
     )
+    fig.update_yaxes(autorange="reversed")
 
-    # Añadir zonas sombreadas para turnos de trabajo
+    # # --- 5) Añadir líneas verticales (sin anotaciones)
+    # for _, row in df_lineas.iterrows():
+    #     # row["Fecha"] es str (ISO)
+    #     fecha_str = row["Fecha"]
+    #     pedido = row["Pedido"]
+    #     tipo = row["Tipo"]
+
+    #     # color
+    #     c = color_map.get(pedido, "gray")
+
+    #     # en x => parsea la cadena ISO para dársela a add_vline
+    #     fig.add_vline(
+    #         x=fecha_str,
+    #         line_dash="dot" if tipo == "Recepción" else "dash",
+    #         line_color=c,
+    #         annotation_text="",  # no usamos annotation aquí
+    #         opacity=0.7
+    #     )
+
+    # --- 6) Sombras de turnos
     for _, row in df_calend.iterrows():
         dia = pd.to_datetime(row["dia"])
-        inicio_turno = pd.to_datetime(f"{dia.date()} {row['hora_inicio']}")
-        fin_turno = pd.to_datetime(f"{dia.date()} {row['hora_fin']}")
+        hi = pd.to_datetime(dia.strftime("%Y-%m-%d") + " " + row["hora_inicio"].strftime("%H:%M:%S"))
+        hf = pd.to_datetime(dia.strftime("%Y-%m-%d") + " " + row["hora_fin"].strftime("%H:%M:%S"))
+
         fig.add_vrect(
-            x0=inicio_turno, x1=fin_turno,
-            fillcolor="LightGray", opacity=0.15,
-            layer="below", line_width=0,
+            x0=hi.isoformat(), x1=hf.isoformat(),
+            fillcolor="LightGray", opacity=0.1,
+            layer="below", line_width=0
         )
 
-    # Ajustes visuales
+    # --- 7) Ajustes finales: slider y zoom
     fig.update_layout(
-        height=600,
-        xaxis_title="Fecha y Hora",
-        yaxis_title="Ubicación",
-        hoverlabel_bgcolor="white",
-        hoverlabel_bordercolor="black",
+        hovermode="closest",
         xaxis=dict(
             rangeselector=dict(
-                buttons=list([
+                buttons=[
                     dict(count=1, label="1 día", step="day", stepmode="todate"),
                     dict(count=7, label="1 semana", step="day", stepmode="todate"),
                     dict(step="all", label="Todo")
-                ])
+                ]
             ),
             rangeslider=dict(visible=True),
             type="date"
         ),
+        height=600
     )
-
-    # Hover personalizado mostrando descripciones completas
-    for i, gantt_shape in enumerate(fig.data):
-        gantt_shape.hovertemplate = df_plot.iloc[i]["Descripcion"]
 
     fig.show()

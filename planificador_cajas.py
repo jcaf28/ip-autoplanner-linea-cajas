@@ -19,7 +19,7 @@ import pulp
 from datetime import datetime
 
 from src.utils import leer_datos
-from src.plot_gantt import plot_gantt
+from src.plot_gantt_matplotlib import plot_gantt
 
 # -----------------------------------------------------------------------
 # 2) APLICAR RESTRICCIONES ESPECÍFICAS
