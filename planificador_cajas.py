@@ -147,64 +147,53 @@ def restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso):
 
 def restriccion_capacidad_zonas(modelo, df_tareas, start, end):
     """
-    Cada 'ubicacion' (zona) tiene una capacidad:
-      - Z0, Z1 => 1, etc.
-    Ejemplo simplificado de "no solapamiento" para capacidad=1:
-      Si dos tareas comparten la misma zona, no se pueden solapar:
-        end(i) <= start(j) OR end(j) <= start(i)
-      => se modela con variables binarias o con la formulación disyuntiva:
-         start(j) >= end(i) - M*(1 - x_ij)
-         start(i) >= end(j) - M*(x_ij)
-      Para no exceder 3 indentaciones, hacemos un pseudo Big-M:
+    Cada 'ubicacion' (zona) tiene una capacidad y no debe haber solapamiento en zonas de capacidad 1.
+    Además, si la capacidad es mayor (ejemplo: 2), se permite que solo tareas del mismo tipo ('OPERATIVA' o 'VERIFICADO') coincidan.
     """
     ZONA_CAP = {
         "PREVIOS": 1,
         "UTILLAJES": 1,
         "ROBOT": 1,
-        "SOPORTERIA": 2,      # 2 elementos a la vez, con matices
+        "SOPORTERIA": 2,      # 2 elementos a la vez, pero con restricciones
         "CATEDRAL": 1,
         "SOLDADURA FINAL": 1,
         "INSPECCION FINAL": 1
     }
-    # M grande
-    M = 1e5
+    M = 1e5  # Big-M
 
-    # Creamos variables binarias "order" para cada par de tareas que compartan zona
-    # order[(i, j)] = 1 => la tarea i va antes que la j
+    # Crear variables binarias para ordenar tareas que no pueden solaparse
     order = {}
     lista_tuplas = []
     df_tareas_idx = df_tareas.reset_index(drop=True)
 
-    # Generamos pares (i, j) solo si zona y material_padre difieren, o no, y la zona es la misma.
+    # Generamos pares (i, j) de tareas que comparten zona y podrían solaparse
     for i in range(len(df_tareas_idx)):
-        for j in range(i+1, len(df_tareas_idx)):
+        for j in range(i + 1, len(df_tareas_idx)):
             rowi = df_tareas_idx.loc[i]
             rowj = df_tareas_idx.loc[j]
-            zona_i = rowi["nom_ubicacion"]
-            zona_j = rowj["nom_ubicacion"]
-            cap_i = ZONA_CAP.get(zona_i, 1)
-            cap_j = ZONA_CAP.get(zona_j, 1)
 
-            mat_i = rowi["material_padre"]
-            mat_j = rowj["material_padre"]
-            t_i   = rowi["id_interno"]
-            t_j   = rowj["id_interno"]
+            zona_i, zona_j = rowi["nom_ubicacion"], rowj["nom_ubicacion"]
+            cap_i, cap_j = ZONA_CAP.get(zona_i, 1), ZONA_CAP.get(zona_j, 1)
+            mat_i, mat_j = rowi["material_padre"], rowj["material_padre"]
+            t_i, t_j = rowi["id_interno"], rowj["id_interno"]
+            tipo_i, tipo_j = rowi["tipo_tarea"], rowj["tipo_tarea"]  # Nuevo campo
 
             if zona_i == zona_j:
-                # Si la capacidad es 1 => no puede haber solape
-                # Si es 2 => puede haber 2 simultáneos, pero ojo con la restricción de "no mezclar verificado y soportería"
-                # Simplificamos con "si cap=1 => no solape; si cap=2 => permitimos solape sin restricciones extra"
+                # Si la capacidad de la zona es 1, no puede haber solapamiento
                 if cap_i == 1:
-                    # Definimos una binaria
                     order[(mat_i, t_i, mat_j, t_j)] = pulp.LpVariable(f"order_{mat_i}_{t_i}_{mat_j}_{t_j}", cat=pulp.LpBinary)
                     lista_tuplas.append((mat_i, t_i, mat_j, t_j))
-                else:
-                    # zona soporeria con cap=2 => no hacemos nada en este prototipo
-                    pass
 
+                # Si la capacidad es mayor a 1, permitir solape solo si son del mismo tipo ('OPERATIVA' vs 'VERIFICADO')
+                elif cap_i > 1 and tipo_i != tipo_j:
+                    order[(mat_i, t_i, mat_j, t_j)] = pulp.LpVariable(f"order_{mat_i}_{t_i}_{mat_j}_{t_j}", cat=pulp.LpBinary)
+                    lista_tuplas.append((mat_i, t_i, mat_j, t_j))
+
+    # Aplicar restricciones de no solapamiento según las variables binarias creadas
     for (mi, ti, mj, tj) in lista_tuplas:
-        modelo += start[(mj, tj)] >= end[(mi, ti)] - (1e5)*(1 - order[(mi, ti, mj, tj)])
-        modelo += start[(mi, ti)] >= end[(mj, tj)] - (1e5)*order[(mi, ti, mj, tj)]
+        modelo += start[(mj, tj)] >= end[(mi, ti)] - M * (1 - order[(mi, ti, mj, tj)])
+        modelo += start[(mi, ti)] >= end[(mj, tj)] - M * order[(mi, ti, mj, tj)]
+
 
 def restriccion_operarios(modelo, df_tareas, df_calend, start, end):
     """
@@ -408,7 +397,7 @@ def plot_gantt(df_sol):
 # 5) FLUJO PRINCIPAL
 # -----------------------------------------------------------------------
 def main():
-    ruta = "archivos\db_dev\Datos_entrada_v4.xlsx"
+    ruta = "archivos\db_dev\Datos_entrada_v5.xlsx"
     datos = leer_datos(ruta)
     modelo, start, end, retraso = armar_modelo(datos)
     resolver_modelo(modelo)
