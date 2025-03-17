@@ -22,33 +22,43 @@ from src.utils import leer_datos
 # 2) APLICAR RESTRICCIONES ESPECÍFICAS
 # -----------------------------------------------------------------------
 def restriccion_duracion(modelo, df_tareas, start, end, df_entregas):
-    """
-    end = start + dur, y no se inicia antes de la recepción de materiales.
-    """
-    for (idx, row) in df_tareas.iterrows():
+    for _, row in df_tareas.iterrows():
         mat = row["material_padre"]
         t_id = row["id_interno"]
-        # Calculamos la duración según el tiempo requerido
-        # Escogemos la mayor de las 3, o sumamos, o la que aplique:
-        # (Aquí, como ejemplo: si la tarea requiere robot => tiempo_robot; si verificado => tiempo_verificado, etc.
-        #  Podrías combinar si se necesita.)
-        dur = 0
-        if not pd.isnull(row["tiempo_operario"]):
-            dur = max(dur, float(row["tiempo_operario"]))
-        if not pd.isnull(row["tiempo_robot"]):
-            dur = max(dur, float(row["tiempo_robot"]))
-        if not pd.isnull(row["tiempo_verificado"]):
-            dur = max(dur, float(row["tiempo_verificado"]))
 
-        # Conectamos con la variable del modelo
-        for (_, entreg_row) in df_entregas.iterrows():
+        # Tomar la columna "num_operarios_fijos"
+        n_ops = 1
+        if "num_operarios_fijos" in df_tareas.columns and not pd.isnull(row["num_operarios_fijos"]):
+            n_ops = float(row["num_operarios_fijos"])
+            if n_ops < 1:
+                n_ops = 1
+
+        # Cálculo de la duración real
+        # p.ej. dur_op = (tiempo_operario / n_ops) si tiempo_operario>0
+        dur_op = 0.0
+        if not pd.isnull(row["tiempo_operario"]) and row["tiempo_operario"]>0:
+            dur_op = row["tiempo_operario"] / n_ops
+
+        dur_robot = 0.0
+        if not pd.isnull(row["tiempo_robot"]) and row["tiempo_robot"]>0:
+            dur_robot = row["tiempo_robot"]
+
+        dur_verif = 0.0
+        if not pd.isnull(row["tiempo_verificado"]) and row["tiempo_verificado"]>0:
+            dur_verif = row["tiempo_verificado"]
+
+        # Escoges la mayor si se hacen en paralelo operario+robot, o la suma, según tu lógica.
+        # Ejemplo: "tiempo_robot" implica un operario vigilando = la tarea entera
+        dur = max(dur_op, dur_robot, dur_verif)
+
+        # end[(mat,t_id)] = start[(mat,t_id)] + dur
+        # No iniciar antes de fecha_recepcion
+        for _, entreg_row in df_entregas.iterrows():
             if entreg_row["referencia"] == mat:
                 rec_date = entreg_row["fecha_recepcion_materiales"]
-                # Convertimos fecha_recepcion_materiales a horas desde un origen
                 rec_ts = (rec_date - datetime(2025,3,1)).total_seconds()/3600
-                # end = start + dur
+
                 modelo += end[(mat, t_id)] == start[(mat, t_id)] + dur
-                # No empezar antes de la recepción
                 modelo += start[(mat, t_id)] >= rec_ts
 
 def restriccion_precedencia(modelo, df_tareas, start, end):
@@ -110,30 +120,32 @@ def restriccion_calendario(modelo, df_calend, start, end):
     for (key, var) in end.items():
         modelo += var <= max_ts
 
-def restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end):
+def restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso):
     """
-    end(tarea_final) <= fecha_entrega para cada pedido.
-    Tarea final = la de id_interno máximo, o la que no aparezca como predecesora de ninguna.
+    end(tarea_final) <= fecha_entrega + retraso[pedido].
+    Si no es posible cumplir la fecha de entrega, el modelo busca minimizar el retraso total.
     """
     for ref in df_entregas["referencia"].unique():
         fecha_limite = df_entregas.loc[df_entregas["referencia"]==ref, "fecha_entrega"].iloc[0]
         entrega_ts = (fecha_limite - datetime(2025,3,1)).total_seconds()/3600
 
         df_mat = df_tareas[df_tareas["material_padre"] == ref]
-        # Buscamos tareas que no son predecesoras de nada => finales
         finales = []
         all_preds = set()
+
         for (_, row) in df_mat.iterrows():
             if not pd.isnull(row["predecesora"]):
                 for pp in str(row["predecesora"]).split(";"):
                     all_preds.add(int(pp.strip()))
+                    
         for t_id in df_mat["id_interno"].unique():
             if t_id not in all_preds:
                 finales.append(t_id)
 
-        # end(tarea_final) <= entrega_ts
+        # end(tarea_final) <= entrega_ts + retraso[pedido]
         for t_id in finales:
-            modelo += end[(ref, t_id)] <= entrega_ts
+            modelo += end[(ref, t_id)] <= entrega_ts + retraso[ref]
+
 
 def restriccion_capacidad_zonas(modelo, df_tareas, start, end):
     """
@@ -197,7 +209,11 @@ def restriccion_capacidad_zonas(modelo, df_tareas, start, end):
         modelo += start[(mi, ti)] >= end[(mj, tj)] - (1e5)*order[(mi, ti, mj, tj)]
 
 def restriccion_operarios(modelo, df_tareas, df_calend, start, end):
-    # Creamos lista de turnos con (dia, turno, ts_ini, ts_fin, operarios_disponibles)
+    """
+    Limitamos el número de operarios disponibles en cada turno según el calendario.
+    - Si 'tiempo_verificado' > 0 => no consume operarios.
+    - Si 'tiempo_operario' > 0 => necesita operarios, pero el número es flexible.
+    """
     turnos = []
     for (_, row) in df_calend.iterrows():
         dia = pd.to_datetime(row["dia"])
@@ -210,37 +226,31 @@ def restriccion_operarios(modelo, df_tareas, df_calend, start, end):
         operarios_disp = row["cantidad_operarios"]
         turnos.append((ts_ini, ts_fin, operarios_disp))
 
-    # Para cada turno, limitamos operarios simultáneos
-    for (ts_ini, ts_fin, operarios_disp) in turnos:
-        operarios_en_turno = []
-        for (idx, tarea) in df_tareas.iterrows():
-            mat, t_id = tarea["material_padre"], tarea["id_interno"]
-            tiempo_operario = tarea["tiempo_operario"]
-            tiempo_robot = tarea["tiempo_robot"]
+    # Variables de asignación de operarios
+    uso_operarios = {}
 
-            # Número fijo de operarios simultáneos por tarea (asumamos que ya lo tienes definido en df_tareas)
-            num_operarios_simult = tarea.get("num_operarios_fijos", 1)  # Esta columna debe existir
+    for (_, tarea) in df_tareas.iterrows():
+        mat, t_id = tarea["material_padre"], tarea["id_interno"]
+        tiempo_operario = tarea["tiempo_operario"]
+        tiempo_robot = tarea["tiempo_robot"]
 
-            # Duración real
-            duracion_real = tiempo_operario / num_operarios_simult if pd.notnull(tiempo_operario) else 0
+        # Se necesitan operarios si hay tiempo operario o el robot requiere vigilancia
+        necesita_op = (not pd.isnull(tiempo_operario) and tiempo_operario > 0) or \
+                      (not pd.isnull(tiempo_robot) and tiempo_robot > 0)
 
-            # Ajustar si hay robot (debe haber al menos 1 operario)
-            if pd.notnull(tiempo_robot):
-                duracion_real = max(duracion_real, tiempo_robot)
-                num_operarios_simult = max(num_operarios_simult, 1)
+        if necesita_op:
+            for (ts_ini, ts_fin, operarios_disp) in turnos:
+                uso_operarios[(mat, t_id, ts_ini)] = pulp.LpVariable(f"uso_op_{mat}_{t_id}_{ts_ini}",
+                                                                      lowBound=0, upBound=operarios_disp, cat="Integer")
 
-            # Variable auxiliar (binaria): ¿La tarea está activa en este turno?
-            activa_en_turno = pulp.LpVariable(f"activa_{mat}_{t_id}_{ts_ini}", cat='Binary')
+                # Restricción de que no exceda los operarios disponibles en el turno
+                modelo += uso_operarios[(mat, t_id, ts_ini)] <= operarios_disp
 
-            # Restricciones para asegurar activación solo cuando solapan
-            M = 1e5
-            modelo += start[(mat, t_id)] <= ts_fin + M*(1 - activa_en_turno)
-            modelo += end[(mat, t_id)] >= ts_ini - M*(1 - activa_en_turno)
+                # Restricción de solapamiento de tareas que consumen operarios
+                M = 1e5  # Big-M
+                modelo += start[(mat, t_id)] >= ts_ini - M * (1 - uso_operarios[(mat, t_id, ts_ini)])
+                modelo += end[(mat, t_id)] <= ts_fin + M * (1 - uso_operarios[(mat, t_id, ts_ini)])
 
-            operarios_en_turno.append(num_operarios_simult * activa_en_turno)
-
-        if operarios_en_turno:
-            modelo += pulp.lpSum(operarios_en_turno) <= operarios_disp
 
 
 # -----------------------------------------------------------------------
@@ -250,7 +260,7 @@ def armar_modelo(datos):
     """
     Crea el modelo, define start/end para cada (pedido, tarea),
     y aplica todas las restricciones (precedencia, calendario, capacidad, etc.).
-    Luego define la función objetivo.
+    Luego define la función objetivo permitiendo retrasos mínimos.
     """
     df_entregas = datos["df_entregas"]
     df_tareas   = datos["df_tareas"]
@@ -262,42 +272,30 @@ def armar_modelo(datos):
     # 1) Variables start/end
     start = {}
     end   = {}
+    retraso = {}  # Nueva variable de tardiness
+
     for p in pedidos:
-        # Filtramos las tareas que apliquen a este pedido
         df_mat = df_tareas[df_tareas["material_padre"] == p]
         for t_id in df_mat["id_interno"].unique():
             start[(p, t_id)] = pulp.LpVariable(f"start_{p}_{t_id}", lowBound=0)
             end[(p, t_id)]   = pulp.LpVariable(f"end_{p}_{t_id}", lowBound=0)
 
+        # Variable de retraso (puede ser >= 0, sin límite superior)
+        retraso[p] = pulp.LpVariable(f"retraso_{p}", lowBound=0)
+
     # 2) Aplicar restricciones
     restriccion_duracion(modelo, df_tareas, start, end, df_entregas)
     restriccion_precedencia(modelo, df_tareas, start, end)
     restriccion_calendario(modelo, datos["df_calend"], start, end)
-    restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end)
     restriccion_capacidad_zonas(modelo, df_tareas, start, end)
     restriccion_operarios(modelo, df_tareas, datos["df_calend"], start, end)
+    restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso)
 
-    # 3) Función objetivo:
-    #    Minimizar la suma del end de tareas finales (o de todas)
-    obj_expr = []
-    for p in pedidos:
-        df_mat = df_tareas[df_tareas["material_padre"] == p]
-        # Tareas finales
-        finales = []
-        all_preds = set()
-        for (_, row) in df_mat.iterrows():
-            if not pd.isnull(row["predecesora"]):
-                for x in str(row["predecesora"]).split(";"):
-                    all_preds.add(int(x.strip()))
-        for t_id in df_mat["id_interno"].unique():
-            if t_id not in all_preds:
-                finales.append(t_id)
-        for f_id in finales:
-            obj_expr.append(end[(p, f_id)])
+    # 4) Función objetivo: minimizar retraso total
+    modelo += pulp.lpSum(retraso.values()), "Minimize_Total_Tardiness"
 
-    modelo += pulp.lpSum(obj_expr), "Minimize_Fin"
+    return modelo, start, end, retraso
 
-    return modelo, start, end
 
 def resolver_modelo(modelo):
     modelo.solve(pulp.PULP_CBC_CMD(msg=0))
@@ -308,8 +306,7 @@ def resolver_modelo(modelo):
 # -----------------------------------------------------------------------
 def escribir_resultados(modelo, start, end, ruta_excel, df_tareas):
     """
-    Igual que antes, pero añade 'operarios_asignados' = 1 si tiempo_operario>0 o tiempo_robot>0,
-    de lo contrario 0.
+    Ahora incluye la cantidad de operarios asignados a cada tarea en los resultados.
     """
     import pandas as pd
     from datetime import datetime, timedelta
@@ -318,24 +315,20 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas):
     print(f"Estado del solver: {estado}")
 
     filas = []
-    origen = datetime(2025, 3, 1, 0, 0, 0)
-
-    # Precalcular dict de 'operarios_usados'
-    op_usage = {}
-    for _, row in df_tareas.iterrows():
-        mat = row["material_padre"]
-        t_id = row["id_interno"]
-        need_op = 0
-        if (not pd.isnull(row["tiempo_operario"]) and row["tiempo_operario"]>0) \
-            or (not pd.isnull(row["tiempo_robot"]) and row["tiempo_robot"]>0):
-            need_op = 1
-        op_usage[(mat, t_id)] = need_op
+    origen = datetime(2025, 3, 1)
 
     for (p, t), var_inicio in start.items():
         val_i = pulp.value(var_inicio)
         val_f = pulp.value(end[(p, t)])
         dt_i = origen + timedelta(hours=float(val_i)) if val_i else None
         dt_f = origen + timedelta(hours=float(val_f)) if val_f else None
+
+        # Buscamos en df_tareas la fila (p, t)
+        row = df_tareas[(df_tareas["material_padre"]==p) & (df_tareas["id_interno"]==t)].iloc[0]
+        n_ops = 0
+        if not pd.isnull(row["num_operarios_fijos"]):
+            n_ops = int(row["num_operarios_fijos"])
+
         filas.append({
             "pedido": p,
             "tarea": t,
@@ -343,12 +336,10 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas):
             "fin": val_f,
             "datetime_inicio": dt_i,
             "datetime_fin": dt_f,
-            "operarios_asignados": op_usage.get((p, t), 0)
+            "operarios_asignados": n_ops
         })
-
     df_sol = pd.DataFrame(filas)
 
-    # Generar nombre de archivo
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base, ext = ruta_excel.rsplit(".", 1)
     new_file = f"{base}_{timestamp}.{ext}"
@@ -358,13 +349,14 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas):
 
     print(f"Resultados guardados en: {new_file}")
 
+
 # -----------------------------------------------------------------------
 # 5) FLUJO PRINCIPAL
 # -----------------------------------------------------------------------
 def main():
     ruta = "archivos\db_dev\Datos_entrada_v4.xlsx"
     datos = leer_datos(ruta)
-    modelo, start, end = armar_modelo(datos)
+    modelo, start, end, retraso = armar_modelo(datos)
     resolver_modelo(modelo)
     escribir_resultados(modelo, start, end, ruta, datos["df_tareas"])
 
