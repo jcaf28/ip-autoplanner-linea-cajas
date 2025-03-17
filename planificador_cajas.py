@@ -290,7 +290,7 @@ def resolver_modelo(modelo):
 # -----------------------------------------------------------------------
 # 4) EXPORTAR RESULTADOS
 # -----------------------------------------------------------------------
-def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas):
+def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend):
     """
     Guarda los resultados de la planificación y genera el diagrama de Gantt.
     """
@@ -339,7 +339,7 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas):
     print(f"Resultados guardados en: {new_file}")
 
     # Llamar a la función plot_gantt pasando df_entregas
-    plot_gantt(df_sol, df_entregas)
+    plot_gantt(df_sol, df_entregas, df_calend)
 
 
 # -----------------------------------------------------------------------
@@ -350,7 +350,7 @@ def main():
     datos = leer_datos(ruta)
     modelo, start, end, retraso = armar_modelo(datos)
     resolver_modelo(modelo)
-    escribir_resultados(modelo, start, end, ruta, datos["df_tareas"], datos["df_entregas"])
+    escribir_resultados(modelo, start, end, ruta, datos["df_tareas"], datos["df_entregas"], datos["df_calend"])
 
 if __name__ == "__main__":
     main()

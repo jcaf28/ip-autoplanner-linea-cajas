@@ -1,93 +1,96 @@
+import plotly.express as px
+import plotly.figure_factory as ff
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import seaborn as sns
-import mplcursors
 
-def plot_gantt(df_sol, df_entregas):
-    fig, ax = plt.subplots(figsize=(14, 6))
-    # Paleta pastel por 'pedido'
-    pedidos_unicos = df_sol["pedido"].unique()
-    palette = sns.color_palette("Set2", n_colors=len(pedidos_unicos))
-    color_map = {pedido: palette[i % len(pedidos_unicos)] for i, pedido in enumerate(pedidos_unicos)}
-
-    ubicaciones = df_sol["ubicacion"].unique()
-    ubicacion_dict = {ubic: i for i, ubic in enumerate(ubicaciones)}
-
-    artists = []
-    tooltips = []
-
-    # Barras de tareas
+def plot_gantt(df_sol, df_entregas, df_calend):
+    tareas = []
+    
+    # tareas normales
     for _, row in df_sol.iterrows():
-        pedido = row["pedido"]
-        color = color_map.get(pedido, "gray")
-        y_pos = ubicacion_dict[row["ubicacion"]]
+        tareas.append(dict(
+            Task=row["ubicacion"],
+            Start=row["datetime_inicio"],
+            Finish=row["datetime_fin"],
+            Resource=row["pedido"],
+            Descripcion=(
+                f"[Tarea: T{row['tarea']}]<br>"
+                f"Pedido: {row['pedido']}<br>"
+                f"Ubicación: {row['ubicacion']}<br>"
+                f"Inicio: {row['datetime_inicio']}<br>"
+                f"Fin: {row['datetime_fin']}<br>"
+                f"Operarios: {row['operarios_asignados']}"
+            )
+        ))
 
-        bar = ax.barh(
-            y=y_pos,
-            width=(row["datetime_fin"] - row["datetime_inicio"]),
-            left=row["datetime_inicio"],
-            color=color,
-            edgecolor="black",
-            alpha=0.8
-        )
-
-        ax.text(row["datetime_inicio"], y_pos, f"T{row['tarea']}", va="center", fontsize=7)
-
-        artists.append(bar[0])
-        tooltip = (
-            f"[Tarea: T{row['tarea']}]\n"
-            f"Pedido: {pedido}\n"
-            f"Ubicación: {row['ubicacion']}\n"
-            f"Inicio: {row['datetime_inicio']}\n"
-            f"Fin: {row['datetime_fin']}\n"
-            f"Operarios: {row['operarios_asignados']}"
-        )
-        tooltips.append(tooltip)
-
-    # Líneas de recepción/entrega
+    # recepciones y entregas
     for _, row in df_entregas.iterrows():
-        pedido = row["referencia"]
-        color = color_map.get(pedido, "gray")
+        tareas.append(dict(
+            Task="Recepción materiales",
+            Start=row["fecha_recepcion_materiales"],
+            Finish=row["fecha_recepcion_materiales"],
+            Resource=row["referencia"],
+            Descripcion=f"Recepción Pedido: {row['referencia']}<br>Fecha: {row['fecha_recepcion_materiales']}"
+        ))
+        tareas.append(dict(
+            Task="Entrega cliente",
+            Start=row["fecha_entrega"],
+            Finish=row["fecha_entrega"],
+            Resource=row["referencia"],
+            Descripcion=f"Entrega Pedido: {row['referencia']}<br>Fecha: {row['fecha_entrega']}"
+        ))
 
-        # Recepción
-        fecha_rec = row["fecha_recepcion_materiales"]
-        line_rec = ax.axvline(fecha_rec, color=color, linestyle="dashed", lw=1.5, alpha=0.8)
-        artists.append(line_rec)
-        ttip_rec = (
-            f"[Recepción]\nPedido: {pedido}\n"
-            f"Fecha: {fecha_rec:%Y-%m-%d %H:%M}"
+    df_plot = pd.DataFrame(tareas)
+
+    # colores alternados por pedido
+    colores = px.colors.qualitative.Pastel
+    pedidos = df_plot["Resource"].unique()
+    color_map = {pedido: colores[i % len(colores)] for i, pedido in enumerate(pedidos)}
+
+    fig = ff.create_gantt(
+        df_plot,
+        index_col='Resource',
+        colors=color_map,
+        show_colorbar=True,
+        group_tasks=True,
+        title="Diagrama de Gantt - Planificación de Producción",
+        bar_width=0.2,
+        showgrid_x=True,
+        showgrid_y=True
+    )
+
+    # Añadir zonas sombreadas para turnos de trabajo
+    for _, row in df_calend.iterrows():
+        dia = pd.to_datetime(row["dia"])
+        inicio_turno = pd.to_datetime(f"{dia.date()} {row['hora_inicio']}")
+        fin_turno = pd.to_datetime(f"{dia.date()} {row['hora_fin']}")
+        fig.add_vrect(
+            x0=inicio_turno, x1=fin_turno,
+            fillcolor="LightGray", opacity=0.15,
+            layer="below", line_width=0,
         )
-        tooltips.append(ttip_rec)
 
-        # Entrega
-        fecha_ent = row["fecha_entrega"]
-        line_ent = ax.axvline(fecha_ent, color=color, linestyle="dashed", lw=1.5, alpha=0.8)
-        artists.append(line_ent)
-        ttip_ent = (
-            f"[Entrega]\nPedido: {pedido}\n"
-            f"Fecha: {fecha_ent:%Y-%m-%d %H:%M}"
-        )
-        tooltips.append(ttip_ent)
+    # Ajustes visuales
+    fig.update_layout(
+        height=600,
+        xaxis_title="Fecha y Hora",
+        yaxis_title="Ubicación",
+        hoverlabel_bgcolor="white",
+        hoverlabel_bordercolor="black",
+        xaxis=dict(
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1 día", step="day", stepmode="todate"),
+                    dict(count=7, label="1 semana", step="day", stepmode="todate"),
+                    dict(step="all", label="Todo")
+                ])
+            ),
+            rangeslider=dict(visible=True),
+            type="date"
+        ),
+    )
 
-    # Ajustes ejes
-    ax.set_yticks(range(len(ubicaciones)))
-    ax.set_yticklabels(ubicaciones)
-    ax.set_xlabel("Fecha y Hora")
-    ax.set_ylabel("Ubicación")
-    ax.set_title("Diagrama de Gantt - Planificación de Producción")
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+    # Hover personalizado mostrando descripciones completas
+    for i, gantt_shape in enumerate(fig.data):
+        gantt_shape.hovertemplate = df_plot.iloc[i]["Descripcion"]
 
-    # Tooltips interactivos
-    cursor = mplcursors.cursor(artists, hover=True, highlight=True, multiple=False)
-
-    @cursor.connect("add")
-    def on_add(sel):
-        # localiza el índice en la lista
-        i = artists.index(sel.artist)
-        sel.annotation.set_text(tooltips[i])
-        sel.annotation.get_bbox_patch().set(fc="white", alpha=0.8)
-
-    plt.show()
+    fig.show()
