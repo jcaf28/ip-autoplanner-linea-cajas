@@ -1,3 +1,5 @@
+# PATH: planificador_cajas.py
+
 # planificador_cajas.py
 # --------------------------------------------------------------------------------
 # Ejemplo de planificación con restricciones de:
@@ -17,6 +19,7 @@ import pulp
 from datetime import datetime
 
 from src.utils import leer_datos
+from src.plot_gantt import plot_gantt
 
 # -----------------------------------------------------------------------
 # 2) APLICAR RESTRICCIONES ESPECÍFICAS
@@ -290,7 +293,7 @@ def resolver_modelo(modelo):
 # -----------------------------------------------------------------------
 # 4) EXPORTAR RESULTADOS
 # -----------------------------------------------------------------------
-def escribir_resultados(modelo, start, end, ruta_excel, df_tareas):
+def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas):
     """
     Guarda los resultados de la planificación y genera el diagrama de Gantt.
     """
@@ -312,7 +315,7 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas):
         dt_f = origen + timedelta(hours=float(val_f)) if val_f else None
 
         # Obtener ubicación y operarios asignados
-        row = df_tareas[(df_tareas["material_padre"]==p) & (df_tareas["id_interno"]==t)].iloc[0]
+        row = df_tareas[(df_tareas["material_padre"] == p) & (df_tareas["id_interno"] == t)].iloc[0]
         ubicacion = row["nom_ubicacion"]
         n_ops = int(row["num_operarios_fijos"]) if not pd.isnull(row["num_operarios_fijos"]) else 1
 
@@ -338,60 +341,10 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas):
 
     print(f"Resultados guardados en: {new_file}")
 
-    # Generar gráfico de Gantt
-    plot_gantt(df_sol)
+    # Llamar a la función plot_gantt pasando df_entregas
+    plot_gantt(df_sol, df_entregas)
 
 
-def plot_gantt(df_sol):
-    """
-    Genera un diagrama de Gantt de las tareas planificadas.
-    """
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-
-    # Crear un diccionario de colores para cada ubicación
-    colores = {
-        "PREVIOS": "blue",
-        "UTILLAJES": "orange",
-        "ROBOT": "red",
-        "SOPORTERIA": "green",
-        "CATEDRAL": "purple",
-        "SOLDADURA FINAL": "cyan",
-        "INSPECCION FINAL": "magenta"
-    }
-
-    fig, ax = plt.subplots(figsize=(12, 6))
-
-    # Obtener posiciones únicas para cada ubicación en el eje Y
-    ubicaciones = df_sol["ubicacion"].unique()
-    ubicacion_dict = {ubicacion: i for i, ubicacion in enumerate(ubicaciones)}
-
-    for _, row in df_sol.iterrows():
-        ax.barh(
-            y=ubicacion_dict[row["ubicacion"]],
-            width=row["datetime_fin"] - row["datetime_inicio"],
-            left=row["datetime_inicio"],
-            color=colores.get(row["ubicacion"], "gray"),
-            alpha=0.7,
-            label=row["ubicacion"] if row["ubicacion"] not in ax.get_legend_handles_labels()[1] else ""
-        )
-
-        # Agregar texto con el ID de la tarea
-        ax.text(row["datetime_inicio"], ubicacion_dict[row["ubicacion"]], f'T{row["tarea"]}', va='center', fontsize=9)
-
-    # Formatear ejes
-    ax.set_yticks(range(len(ubicaciones)))
-    ax.set_yticklabels(ubicaciones)
-    ax.set_xlabel("Fecha y Hora")
-    ax.set_ylabel("Ubicación")
-    ax.set_title("Diagrama de Gantt - Planificación de Producción")
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
-    plt.xticks(rotation=45)
-    plt.legend(title="Ubicaciones")
-    plt.tight_layout()
-    
-    # Mostrar gráfico
-    plt.show()
 
 # -----------------------------------------------------------------------
 # 5) FLUJO PRINCIPAL
@@ -401,7 +354,7 @@ def main():
     datos = leer_datos(ruta)
     modelo, start, end, retraso = armar_modelo(datos)
     resolver_modelo(modelo)
-    escribir_resultados(modelo, start, end, ruta, datos["df_tareas"])
+    escribir_resultados(modelo, start, end, ruta, datos["df_tareas"], datos["df_entregas"])
 
 if __name__ == "__main__":
     main()
