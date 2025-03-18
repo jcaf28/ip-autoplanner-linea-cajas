@@ -103,15 +103,33 @@ def comprimir_calendario(df_calend):
 # --------------------------------------------------------------------------------
 # 2) RESTRICCIONES
 # --------------------------------------------------------------------------------
+def fijar_inicio_tareas_parciales(modelo, df_tareas, df_entregas, start, fn_comprimir):
+    """
+    Para cada tarea en curso (0 < completada_porcentaje < 1), se fija su inicio
+    en el instante comprimido correspondiente a la fecha de recepción del material.
+    """
+    for _, row in df_tareas.iterrows():
+        mat = row["material_padre"]
+        t_id = row["id_interno"]
+        pct = row.get("completada_porcentaje", 0.0)
+        if 0 < pct < 1:
+            # Obtener la fecha de recepción para ese material
+            fecha_rec = df_entregas.loc[df_entregas["referencia"] == mat, "fecha_recepcion_materiales"].iloc[0]
+            rec_ts = fn_comprimir(fecha_rec)
+            modelo += start[(mat, t_id)] == rec_ts
+
+
 def restriccion_duracion(modelo, df_tareas, start, end):
     """
-    end = start + dur, donde dur depende de (tiempo_operario, tiempo_robot, tiempo_verificado).
-    Se asume que las tareas operario+robot son en paralelo y la duración es la máx(t_op, t_robot, t_verif).
+    end = start + dur_rest, donde dur_rest = dur_total * (1 - completada_porcentaje).
+    El dur_total depende de (tiempo_operario, tiempo_robot, tiempo_verificado)
+    y se asume que operario+robot suceden en paralelo (dur_total = max(t_op, t_robot, t_verif)).
     """
     for _, row in df_tareas.iterrows():
         mat = row["material_padre"]
         t_id = row["id_interno"]
 
+        # Número de operarios, si aplica
         n_ops = 1
         if "num_operarios_fijos" in df_tareas.columns and not pd.isnull(row["num_operarios_fijos"]):
             n_ops = float(row["num_operarios_fijos"])
@@ -120,7 +138,6 @@ def restriccion_duracion(modelo, df_tareas, start, end):
 
         dur_op = 0.0
         if not pd.isnull(row["tiempo_operario"]) and row["tiempo_operario"] > 0:
-            # Dividimos por n_ops si lo consideras oportuno, o lo dejas tal cual.
             dur_op = row["tiempo_operario"] / n_ops
 
         dur_robot = 0.0
@@ -131,9 +148,19 @@ def restriccion_duracion(modelo, df_tareas, start, end):
         if not pd.isnull(row["tiempo_verificado"]) and row["tiempo_verificado"] > 0:
             dur_verif = row["tiempo_verificado"]
 
-        dur = max(dur_op, dur_robot, dur_verif)
+        # Duración teórica total (antes de restar el avance)
+        dur_total = max(dur_op, dur_robot, dur_verif)
 
-        modelo += end[(mat, t_id)] == start[(mat, t_id)] + dur
+        # Porcentaje completado
+        pct = row.get("completada_porcentaje", 0.0)
+        if pct > 1.0:
+            pct = 1.0  # Por si por error viniera mayor a 1
+
+        # Duración restante a planificar
+        dur_rest = dur_total * (1 - pct)
+
+        # end = start + dur_rest
+        modelo += end[(mat, t_id)] == start[(mat, t_id)] + dur_rest
 
 
 def restriccion_precedencia(modelo, df_tareas, start, end):
@@ -299,19 +326,14 @@ def restriccion_operarios(modelo, df_tareas, start, end, df_parametros):
 # 3) CREAR Y RESOLVER EL MODELO
 # --------------------------------------------------------------------------------
 def armar_modelo(datos):
-    """
-    Crea el modelo en base a los datos comprimidos, define start/end para cada (pedido, tarea)
-    y aplica las restricciones.
-    """
     df_entregas = datos["df_entregas"]
     df_tareas = datos["df_tareas"]
     fn_comprimir = datos["fn_comprimir"]
 
     modelo = pulp.LpProblem("Planificacion_Completa", pulp.LpMinimize)
-
     pedidos = df_entregas["referencia"].unique().tolist()
 
-    # Variables start/end y retraso
+    # Crear variables start, end y retraso
     start = {}
     end = {}
     retraso = {}
@@ -321,32 +343,27 @@ def armar_modelo(datos):
         for t_id in df_mat["id_interno"].unique():
             start[(p, t_id)] = pulp.LpVariable(f"start_{p}_{t_id}", lowBound=0)
             end[(p, t_id)] = pulp.LpVariable(f"end_{p}_{t_id}", lowBound=0)
-
-        # Variable de retraso
         retraso[p] = pulp.LpVariable(f"retraso_{p}", lowBound=0)
 
-    # 1) Restricción de duración
+    # Restricción de duración (con duración restante en función del avance)
     restriccion_duracion(modelo, df_tareas, start, end)
 
-    # 2) Precedencia
+    # Fijar el inicio para las tareas en curso según la fecha de recepción
+    fijar_inicio_tareas_parciales(modelo, df_tareas, df_entregas, start, fn_comprimir)
+
+    # Resto de restricciones
     restriccion_precedencia(modelo, df_tareas, start, end)
-
-    # 3) No empezar antes de la fecha de recepción (ya convertida a t_comprimido)
     restriccion_no_iniciar_antes_recepcion(modelo, df_entregas, df_tareas, start, fn_comprimir)
-
-    # 4) Capacidad de zonas (similar a antes)
     restriccion_capacidad_zonas(modelo, df_tareas, start, end)
-
-    # 5) Capacidad de operarios (simplificado a 8 operarios global)
     restriccion_operarios(modelo, df_tareas, start, end, datos["df_parametros"])
-
-    # 6) Entrega a tiempo (minimizar retraso)
     restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso, fn_comprimir)
 
-    # Función objetivo: minimizar la suma de retrasos
+    # Función objetivo
     modelo += pulp.lpSum(retraso.values()), "Minimize_Total_Tardiness"
 
     return modelo, start, end, retraso
+
+
 
 def resolver_modelo(modelo):
     modelo.solve(pulp.PULP_CBC_CMD(msg=0))
