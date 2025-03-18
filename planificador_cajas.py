@@ -18,8 +18,7 @@ import pandas as pd
 import pulp
 from datetime import datetime
 
-from src.utils import leer_datos
-from src.plot_gantt_matplotlib import plot_gantt
+from src.utils import leer_datos, escribir_resultados
 
 # -----------------------------------------------------------------------
 # 2) APLICAR RESTRICCIONES ESPECÍFICAS
@@ -290,56 +289,6 @@ def resolver_modelo(modelo):
 # -----------------------------------------------------------------------
 # 4) EXPORTAR RESULTADOS
 # -----------------------------------------------------------------------
-def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend):
-    """
-    Guarda los resultados de la planificación y genera el diagrama de Gantt.
-    """
-    import pandas as pd
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    from datetime import datetime, timedelta
-
-    estado = pulp.LpStatus[modelo.status]
-    print(f"Estado del solver: {estado}")
-
-    filas = []
-    origen = datetime(2025, 3, 1)
-
-    for (p, t), var_inicio in start.items():
-        val_i = pulp.value(var_inicio)
-        val_f = pulp.value(end[(p, t)])
-        dt_i = origen + timedelta(hours=float(val_i)) if val_i else None
-        dt_f = origen + timedelta(hours=float(val_f)) if val_f else None
-
-        # Obtener ubicación y operarios asignados
-        row = df_tareas[(df_tareas["material_padre"] == p) & (df_tareas["id_interno"] == t)].iloc[0]
-        ubicacion = row["nom_ubicacion"]
-        n_ops = int(row["num_operarios_fijos"]) if not pd.isnull(row["num_operarios_fijos"]) else 1
-
-        filas.append({
-            "pedido": p,
-            "tarea": t,
-            "inicio": val_i,
-            "fin": val_f,
-            "datetime_inicio": dt_i,
-            "datetime_fin": dt_f,
-            "ubicacion": ubicacion,
-            "operarios_asignados": n_ops
-        })
-    
-    df_sol = pd.DataFrame(filas)
-
-    # Guardar en Excel
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base, ext = ruta_excel.rsplit(".", 1)
-    new_file = f"{base}_{timestamp}.{ext}"
-    with pd.ExcelWriter(new_file, engine="openpyxl", mode="w") as writer:
-        df_sol.to_excel(writer, sheet_name="RESULTADOS", index=False)
-
-    print(f"Resultados guardados en: {new_file}")
-
-    # Llamar a la función plot_gantt pasando df_entregas
-    plot_gantt(df_sol, df_entregas, df_calend)
 
 
 # -----------------------------------------------------------------------
