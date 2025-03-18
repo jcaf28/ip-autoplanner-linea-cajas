@@ -1,283 +1,349 @@
-# PATH: planificador_cajas.py
-
-# planificador_cajas.py
-# --------------------------------------------------------------------------------
-# Ejemplo de planificación con restricciones de:
-#  - Precedencia de tareas
-#  - Capacidad de zona (1 elemento, 2 elementos, etc.)
-#  - No solapar tareas incompatibles en la misma zona
-#  - Calendario de turnos y horas de trabajo
-#  - Disponibilidad de operarios
-#  - Tareas de verificación que no consumen operarios
-#
-# Uso:
-#   python planificador_cajas.py
-# --------------------------------------------------------------------------------
-
 import pandas as pd
 import pulp
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.utils import leer_datos, escribir_resultados
 
-# -----------------------------------------------------------------------
-# RESTRICCIONES 
-# -----------------------------------------------------------------------
-def restriccion_duracion(modelo, df_tareas, start, end, df_entregas):
+# --------------------------------------------------------------------------------
+# 1) COMPRESIÓN Y DESCOMPRESIÓN DEL CALENDARIO
+# --------------------------------------------------------------------------------
+def comprimir_calendario(df_calend):
+    """
+    Toma el calendario de turnos (fecha, hora_inicio, hora_fin) y construye una
+    línea de tiempo comprimida, sólo con las horas efectivas de trabajo.
+    
+    Devuelve:
+      - intervals: lista de diccionarios con:
+            {
+              "dt_inicio": datetime real,
+              "dt_fin":    datetime real,
+              "comp_start": hora_comprimida_inicio,
+              "comp_end":   hora_comprimida_fin
+            }
+      - fn_comprimir(dt: datetime) -> float
+      - fn_descomprimir(comp_t: float) -> datetime
+      - total_horas_comprimidas (float)
+    """
+    # Ordenamos por fecha y turno (asumiendo que ya viene ordenado, pero por si acaso)
+    df_calend = df_calend.copy()
+    df_calend = df_calend.sort_values(by=["dia", "hora_inicio"])
+
+    intervals = []
+    acumulado = 0.0  # Acumula las horas comprimidas
+
+    for _, row in df_calend.iterrows():
+        dia = row["dia"]  # date
+        hi = row["hora_inicio"]  # tipo datetime.time
+        hf = row["hora_fin"]     # tipo datetime.time
+
+        dt_ini = datetime(dia.year, dia.month, dia.day, hi.hour, hi.minute, hi.second)
+        dt_fin = datetime(dia.year, dia.month, dia.day, hf.hour, hf.minute, hf.second)
+
+        dur_h = (dt_fin - dt_ini).total_seconds() / 3600.0
+        if dur_h <= 0:
+            continue
+
+        comp_start = acumulado
+        comp_end = acumulado + dur_h
+        intervals.append({
+            "dt_inicio": dt_ini,
+            "dt_fin": dt_fin,
+            "comp_start": comp_start,
+            "comp_end": comp_end
+        })
+        acumulado += dur_h
+
+    def fn_comprimir(dt_real):
+        """
+        Convierte un datetime real en su correspondiente 'hora comprimida'.
+        Si cae fuera de los intervalos de trabajo, se lleva al siguiente hueco disponible.
+        Si dt_real < primer intervalo, devolvemos 0.
+        """
+        if not intervals:
+            return 0.0
+
+        # Si es anterior al primer turno
+        if dt_real < intervals[0]["dt_inicio"]:
+            return 0.0
+
+        for itv in intervals:
+            if itv["dt_inicio"] <= dt_real <= itv["dt_fin"]:
+                # Está dentro de un turno
+                delta = (dt_real - itv["dt_inicio"]).total_seconds() / 3600.0
+                return itv["comp_start"] + delta
+            elif dt_real < itv["dt_inicio"]:
+                # Está en un hueco muerto (fuera de turno), saltamos al inicio del turno
+                return itv["comp_start"]
+
+        # Si es posterior al último turno, se redondea al final
+        return intervals[-1]["comp_end"]
+
+    def fn_descomprimir(comp_t):
+        """
+        Convierte una 'hora comprimida' a un datetime real.
+        Si comp_t excede el último turno, devolvemos el final del último turno.
+        """
+        if not intervals:
+            # No hay turnos; retornar algo por defecto
+            return datetime(2025, 3, 1)
+
+        if comp_t <= intervals[0]["comp_start"]:
+            return intervals[0]["dt_inicio"]
+
+        for itv in intervals:
+            if itv["comp_start"] <= comp_t <= itv["comp_end"]:
+                # está dentro de este turno
+                delta_h = comp_t - itv["comp_start"]
+                return itv["dt_inicio"] + timedelta(hours=delta_h)
+        # Si supera el último tramo
+        return intervals[-1]["dt_fin"]
+
+    return intervals, fn_comprimir, fn_descomprimir, acumulado
+
+# --------------------------------------------------------------------------------
+# 2) RESTRICCIONES
+# --------------------------------------------------------------------------------
+def restriccion_duracion(modelo, df_tareas, start, end):
+    """
+    end = start + dur, donde dur depende de (tiempo_operario, tiempo_robot, tiempo_verificado).
+    Se asume que las tareas operario+robot son en paralelo y la duración es la máx(t_op, t_robot, t_verif).
+    """
     for _, row in df_tareas.iterrows():
         mat = row["material_padre"]
         t_id = row["id_interno"]
 
-        # Tomar la columna "num_operarios_fijos"
         n_ops = 1
         if "num_operarios_fijos" in df_tareas.columns and not pd.isnull(row["num_operarios_fijos"]):
             n_ops = float(row["num_operarios_fijos"])
             if n_ops < 1:
                 n_ops = 1
 
-        # Cálculo de la duración real
-        # p.ej. dur_op = (tiempo_operario / n_ops) si tiempo_operario>0
         dur_op = 0.0
-        if not pd.isnull(row["tiempo_operario"]) and row["tiempo_operario"]>0:
+        if not pd.isnull(row["tiempo_operario"]) and row["tiempo_operario"] > 0:
+            # Dividimos por n_ops si lo consideras oportuno, o lo dejas tal cual.
             dur_op = row["tiempo_operario"] / n_ops
 
         dur_robot = 0.0
-        if not pd.isnull(row["tiempo_robot"]) and row["tiempo_robot"]>0:
+        if not pd.isnull(row["tiempo_robot"]) and row["tiempo_robot"] > 0:
             dur_robot = row["tiempo_robot"]
 
         dur_verif = 0.0
-        if not pd.isnull(row["tiempo_verificado"]) and row["tiempo_verificado"]>0:
+        if not pd.isnull(row["tiempo_verificado"]) and row["tiempo_verificado"] > 0:
             dur_verif = row["tiempo_verificado"]
 
-        # Escoges la mayor si se hacen en paralelo operario+robot, o la suma, según tu lógica.
-        # Ejemplo: "tiempo_robot" implica un operario vigilando = la tarea entera
         dur = max(dur_op, dur_robot, dur_verif)
 
-        # end[(mat,t_id)] = start[(mat,t_id)] + dur
-        # No iniciar antes de fecha_recepcion
-        for _, entreg_row in df_entregas.iterrows():
-            if entreg_row["referencia"] == mat:
-                rec_date = entreg_row["fecha_recepcion_materiales"]
-                rec_ts = (rec_date - datetime(2025,3,1)).total_seconds()/3600
+        modelo += end[(mat, t_id)] == start[(mat, t_id)] + dur
 
-                modelo += end[(mat, t_id)] == start[(mat, t_id)] + dur
-                modelo += start[(mat, t_id)] >= rec_ts
 
 def restriccion_precedencia(modelo, df_tareas, start, end):
     """
-    end(predecesora) <= start(tarea).
-    Maneja múltiples predecesoras separadas por ';'.
-    Hasta que *todas* las predecesoras no terminan, no se puede empezar la tarea.
+    end(predecesora) <= start(tarea). Si hay múltiples predecesoras, la tarea no arranca
+    hasta que TODAS finalicen.
     """
     for _, row in df_tareas.iterrows():
         mat = row["material_padre"]
         t_id = row["id_interno"]
+
         if not pd.isnull(row["predecesora"]):
-            # Parseamos la lista de predecesoras
             lista_preds = [int(x.strip()) for x in str(row["predecesora"]).split(";")]
             for p_id in lista_preds:
-                # Asegurarnos de que exista (mat, p_id) en end
                 if (mat, p_id) not in end:
-                    # Puedes lanzar un error, o ignorar la restricción. Pero
-                    # lo correcto es depurar los datos para que sí exista:
                     raise ValueError(
                         f"La tarea {t_id} del material {mat} tiene predecesora {p_id}, "
                         f"pero no existe en 'end'. Revisa la hoja TAREAS."
                     )
                 modelo += end[(mat, p_id)] <= start[(mat, t_id)]
 
-def restriccion_calendario(modelo, df_calend, start, end):
+
+def restriccion_no_iniciar_antes_recepcion(modelo, df_entregas, df_tareas, start, fn_comprimir):
     """
-    Ejemplo simplificado:
-    - No se trabaja fuera de los rangos de turnos
-    - Suponemos que la tarea se puede partir entre turnos (en la realidad, se modelaría de otro modo).
-    - Aquí usaremos la idea de 'start' y 'end' deben caer dentro del rango global de horas laborables.
+    start(tarea) >= fecha_recepcion (en tiempo comprimido).
     """
-    # Rango global
-    min_ts = float("inf")
-    max_ts = float("-inf")
+    for _, row in df_tareas.iterrows():
+        mat = row["material_padre"]
+        t_id = row["id_interno"]
 
-    for (_, row) in df_calend.iterrows():
-        dia_val = row["dia"]  # es un datetime.date
-        day_dt = datetime(dia_val.year, dia_val.month, dia_val.day)
-        hi_str = row["hora_inicio"]  # hh:mm:ss
-        hf_str = row["hora_fin"]
-        # Convertir a datetimes
-        hi = datetime.strptime(str(hi_str), "%H:%M:%S").time()
-        hf = datetime.strptime(str(hf_str), "%H:%M:%S").time()
-        dt_ini = datetime(day_dt.year, day_dt.month, day_dt.day, hi.hour, hi.minute, hi.second)
-        dt_fin = datetime(day_dt.year, day_dt.month, day_dt.day, hf.hour, hf.minute, hf.second)
-        ts_ini = (dt_ini - datetime(2025,3,1)).total_seconds()/3600
-        ts_fin = (dt_fin - datetime(2025,3,1)).total_seconds()/3600
+        fecha_rec = df_entregas.loc[df_entregas["referencia"] == mat, "fecha_recepcion_materiales"].iloc[0]
+        rec_ts = fn_comprimir(fecha_rec)
+        modelo += start[(mat, t_id)] >= rec_ts
 
-        if ts_ini < min_ts: 
-            min_ts = ts_ini
-        if ts_fin > max_ts:
-            max_ts = ts_fin
 
-    # Forzamos que start/end estén dentro del horario global
-    for (key, var) in start.items():
-        modelo += var >= min_ts
-    for (key, var) in end.items():
-        modelo += var <= max_ts
-
-def restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso):
+def restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso, fn_comprimir):
     """
-    end(tarea_final) <= fecha_entrega + retraso[pedido].
-    Si no es posible cumplir la fecha de entrega, el modelo busca minimizar el retraso total.
+    end(tarea_final) <= fecha_entrega_comprimida + retraso[pedido].
     """
     for ref in df_entregas["referencia"].unique():
-        fecha_limite = df_entregas.loc[df_entregas["referencia"]==ref, "fecha_entrega"].iloc[0]
-        entrega_ts = (fecha_limite - datetime(2025,3,1)).total_seconds()/3600
+        fecha_limite = df_entregas.loc[df_entregas["referencia"] == ref, "fecha_entrega"].iloc[0]
+        entrega_ts = fn_comprimir(fecha_limite)
 
+        # Buscamos las tareas "finales" (aquellas que no son predecesoras de otras)
         df_mat = df_tareas[df_tareas["material_padre"] == ref]
         finales = []
         all_preds = set()
 
-        for (_, row) in df_mat.iterrows():
+        for _, row in df_mat.iterrows():
             if not pd.isnull(row["predecesora"]):
                 for pp in str(row["predecesora"]).split(";"):
                     all_preds.add(int(pp.strip()))
-                    
+
         for t_id in df_mat["id_interno"].unique():
             if t_id not in all_preds:
                 finales.append(t_id)
 
-        # end(tarea_final) <= entrega_ts + retraso[pedido]
         for t_id in finales:
             modelo += end[(ref, t_id)] <= entrega_ts + retraso[ref]
 
+
 def restriccion_capacidad_zonas(modelo, df_tareas, start, end):
     """
-    Cada 'ubicacion' (zona) tiene una capacidad y no debe haber solapamiento en zonas de capacidad 1.
-    Además, si la capacidad es mayor (ejemplo: 2), se permite que solo tareas del mismo tipo ('OPERATIVA' o 'VERIFICADO') coincidan.
+    Igual que antes: si la zona tiene capacidad 1, no se pueden solapar las tareas en esa zona.
+    Si la capacidad es 2, se permite solapar sólo si son del mismo tipo (OPERATIVA vs VERIFICADO), etc.
     """
     ZONA_CAP = {
         "PREVIOS": 1,
         "UTILLAJES": 1,
         "ROBOT": 1,
-        "SOPORTERIA": 2,      # 2 elementos a la vez, pero con restricciones
+        "SOPORTERIA": 2,     # 2 elementos a la vez, pero con restricción de tipo
         "CATEDRAL": 1,
         "SOLDADURA FINAL": 1,
         "INSPECCION FINAL": 1
     }
-    M = 1e5  # Big-M
+    M = 1e5
+    order_zona = {}
 
-    # Crear variables binarias para ordenar tareas que no pueden solaparse
-    order = {}
-    lista_tuplas = []
     df_tareas_idx = df_tareas.reset_index(drop=True)
+    lista_tuplas = []
 
-    # Generamos pares (i, j) de tareas que comparten zona y podrían solaparse
     for i in range(len(df_tareas_idx)):
         for j in range(i + 1, len(df_tareas_idx)):
             rowi = df_tareas_idx.loc[i]
             rowj = df_tareas_idx.loc[j]
 
             zona_i, zona_j = rowi["nom_ubicacion"], rowj["nom_ubicacion"]
-            cap_i, cap_j = ZONA_CAP.get(zona_i, 1), ZONA_CAP.get(zona_j, 1)
+            tipo_i, tipo_j = rowi["tipo_tarea"], rowj["tipo_tarea"]
             mat_i, mat_j = rowi["material_padre"], rowj["material_padre"]
             t_i, t_j = rowi["id_interno"], rowj["id_interno"]
-            tipo_i, tipo_j = rowi["tipo_tarea"], rowj["tipo_tarea"]  # Nuevo campo
+
+            cap_i = ZONA_CAP.get(zona_i, 1)
+            cap_j = ZONA_CAP.get(zona_j, 1)
 
             if zona_i == zona_j:
-                # Si la capacidad de la zona es 1, no puede haber solapamiento
+                # Capacidad 1 -> no solapan
                 if cap_i == 1:
-                    order[(mat_i, t_i, mat_j, t_j)] = pulp.LpVariable(f"order_{mat_i}_{t_i}_{mat_j}_{t_j}", cat=pulp.LpBinary)
+                    var = pulp.LpVariable(f"zonaOrder_{mat_i}_{t_i}_{mat_j}_{t_j}", cat=pulp.LpBinary)
+                    order_zona[(mat_i, t_i, mat_j, t_j)] = var
                     lista_tuplas.append((mat_i, t_i, mat_j, t_j))
 
-                # Si la capacidad es mayor a 1, permitir solape solo si son del mismo tipo ('OPERATIVA' vs 'VERIFICADO')
+                # Capacidad > 1 -> sólo solapan si el tipo_tarea es el mismo
                 elif cap_i > 1 and tipo_i != tipo_j:
-                    order[(mat_i, t_i, mat_j, t_j)] = pulp.LpVariable(f"order_{mat_i}_{t_i}_{mat_j}_{t_j}", cat=pulp.LpBinary)
+                    var = pulp.LpVariable(f"zonaOrder_{mat_i}_{t_i}_{mat_j}_{t_j}", cat=pulp.LpBinary)
+                    order_zona[(mat_i, t_i, mat_j, t_j)] = var
                     lista_tuplas.append((mat_i, t_i, mat_j, t_j))
 
-    # Aplicar restricciones de no solapamiento según las variables binarias creadas
+    # Aplicar restricciones
     for (mi, ti, mj, tj) in lista_tuplas:
-        modelo += start[(mj, tj)] >= end[(mi, ti)] - M * (1 - order[(mi, ti, mj, tj)])
-        modelo += start[(mi, ti)] >= end[(mj, tj)] - M * order[(mi, ti, mj, tj)]
+        modelo += start[(mj, tj)] >= end[(mi, ti)] - M * (1 - order_zona[(mi, ti, mj, tj)])
+        modelo += start[(mi, ti)] >= end[(mj, tj)] - M * order_zona[(mi, ti, mj, tj)]
 
-def restriccion_operarios(modelo, df_tareas, df_calend, start, end):
+
+def restriccion_operarios(modelo, df_tareas, start, end):
     """
-    Limitamos el número de operarios disponibles en cada turno según el calendario.
-    - Si 'tiempo_verificado' > 0 => no consume operarios.
-    - Si 'tiempo_operario' > 0 => necesita operarios, pero el número es flexible.
+    Cantidad de operarios fija = 8. 
+    Se hace un control pairwise: si la suma de n_ops (tarea i + tarea j) > 8, 
+    entonces dichas tareas no pueden solaparse.
+    
+    NOTA: Esto es un enfoque simplificado. Si quieres permitir que 3 ó más tareas se 
+    solapen (siempre que la suma no supere 8), habría que modelar de forma más compleja.
     """
-    turnos = []
-    for (_, row) in df_calend.iterrows():
-        dia = pd.to_datetime(row["dia"])
-        hora_inicio = row["hora_inicio"]
-        hora_fin = row["hora_fin"]
-        dt_ini = datetime.combine(dia, hora_inicio)
-        dt_fin = datetime.combine(dia, hora_fin)
-        ts_ini = (dt_ini - datetime(2025,3,1)).total_seconds()/3600
-        ts_fin = (dt_fin - datetime(2025,3,1)).total_seconds()/3600
-        operarios_disp = row["cantidad_operarios"]
-        turnos.append((ts_ini, ts_fin, operarios_disp))
+    MAX_OP = 8
+    M = 1e5
+    order_ops = {}
 
-    # Variables de asignación de operarios
-    uso_operarios = {}
+    df_tareas_idx = df_tareas.reset_index(drop=True)
+    lista_pairs = []
 
-    for (_, tarea) in df_tareas.iterrows():
-        mat, t_id = tarea["material_padre"], tarea["id_interno"]
-        tiempo_operario = tarea["tiempo_operario"]
-        tiempo_robot = tarea["tiempo_robot"]
+    for i in range(len(df_tareas_idx)):
+        for j in range(i + 1, len(df_tareas_idx)):
+            rowi = df_tareas_idx.loc[i]
+            rowj = df_tareas_idx.loc[j]
+            mat_i, t_i = rowi["material_padre"], rowi["id_interno"]
+            mat_j, t_j = rowj["material_padre"], rowj["id_interno"]
 
-        # Se necesitan operarios si hay tiempo operario o el robot requiere vigilancia
-        necesita_op = (not pd.isnull(tiempo_operario) and tiempo_operario > 0) or \
-                      (not pd.isnull(tiempo_robot) and tiempo_robot > 0)
+            # Calcula la "demanda" de operarios de cada tarea
+            n_ops_i = 1
+            if "num_operarios_fijos" in rowi and not pd.isnull(rowi["num_operarios_fijos"]):
+                n_ops_i = float(rowi["num_operarios_fijos"])
+                if n_ops_i < 1:
+                    n_ops_i = 1
 
-        if necesita_op:
-            for (ts_ini, ts_fin, operarios_disp) in turnos:
-                uso_operarios[(mat, t_id, ts_ini)] = pulp.LpVariable(f"uso_op_{mat}_{t_id}_{ts_ini}",
-                                                                      lowBound=0, upBound=operarios_disp, cat="Integer")
+            n_ops_j = 1
+            if "num_operarios_fijos" in rowj and not pd.isnull(rowj["num_operarios_fijos"]):
+                n_ops_j = float(rowj["num_operarios_fijos"])
+                if n_ops_j < 1:
+                    n_ops_j = 1
 
-                # Restricción de que no exceda los operarios disponibles en el turno
-                modelo += uso_operarios[(mat, t_id, ts_ini)] <= operarios_disp
+            # Si la suma excede 8, no pueden solaparse
+            if (n_ops_i + n_ops_j) > MAX_OP:
+                var = pulp.LpVariable(f"opsOrder_{mat_i}_{t_i}_{mat_j}_{t_j}", cat=pulp.LpBinary)
+                order_ops[(mat_i, t_i, mat_j, t_j)] = var
+                lista_pairs.append((mat_i, t_i, mat_j, t_j))
 
-                # Restricción de solapamiento de tareas que consumen operarios
-                M = 1e5  # Big-M
-                modelo += start[(mat, t_id)] >= ts_ini - M * (1 - uso_operarios[(mat, t_id, ts_ini)])
-                modelo += end[(mat, t_id)] <= ts_fin + M * (1 - uso_operarios[(mat, t_id, ts_ini)])
+    # Restricciones pairwise
+    for (mi, ti, mj, tj) in lista_pairs:
+        modelo += start[(mj, tj)] >= end[(mi, ti)] - M * (1 - order_ops[(mi, ti, mj, tj)])
+        modelo += start[(mi, ti)] >= end[(mj, tj)] - M * order_ops[(mi, ti, mj, tj)]
 
-# -----------------------------------------------------------------------
+
+# --------------------------------------------------------------------------------
 # 3) CREAR Y RESOLVER EL MODELO
-# -----------------------------------------------------------------------
+# --------------------------------------------------------------------------------
 def armar_modelo(datos):
     """
-    Crea el modelo, define start/end para cada (pedido, tarea),
-    y aplica todas las restricciones (precedencia, calendario, capacidad, etc.).
-    Luego define la función objetivo permitiendo retrasos mínimos.
+    Crea el modelo en base a los datos comprimidos, define start/end para cada (pedido, tarea)
+    y aplica las restricciones.
     """
     df_entregas = datos["df_entregas"]
-    df_tareas   = datos["df_tareas"]
+    df_tareas = datos["df_tareas"]
+    fn_comprimir = datos["fn_comprimir"]
+
     modelo = pulp.LpProblem("Planificacion_Completa", pulp.LpMinimize)
 
     pedidos = df_entregas["referencia"].unique().tolist()
-    t_ids   = df_tareas["id_interno"].unique().tolist()
 
-    # 1) Variables start/end
+    # Variables start/end y retraso
     start = {}
-    end   = {}
-    retraso = {}  # Nueva variable de tardiness
+    end = {}
+    retraso = {}
 
     for p in pedidos:
         df_mat = df_tareas[df_tareas["material_padre"] == p]
         for t_id in df_mat["id_interno"].unique():
             start[(p, t_id)] = pulp.LpVariable(f"start_{p}_{t_id}", lowBound=0)
-            end[(p, t_id)]   = pulp.LpVariable(f"end_{p}_{t_id}", lowBound=0)
+            end[(p, t_id)] = pulp.LpVariable(f"end_{p}_{t_id}", lowBound=0)
 
-        # Variable de retraso (puede ser >= 0, sin límite superior)
+        # Variable de retraso
         retraso[p] = pulp.LpVariable(f"retraso_{p}", lowBound=0)
 
-    # 2) Aplicar restricciones
-    restriccion_duracion(modelo, df_tareas, start, end, df_entregas)
-    restriccion_precedencia(modelo, df_tareas, start, end)
-    restriccion_calendario(modelo, datos["df_calend"], start, end)
-    restriccion_capacidad_zonas(modelo, df_tareas, start, end)
-    restriccion_operarios(modelo, df_tareas, datos["df_calend"], start, end)
-    restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso)
+    # 1) Restricción de duración
+    restriccion_duracion(modelo, df_tareas, start, end)
 
-    # 4) Función objetivo: minimizar retraso total
+    # 2) Precedencia
+    restriccion_precedencia(modelo, df_tareas, start, end)
+
+    # 3) No empezar antes de la fecha de recepción (ya convertida a t_comprimido)
+    restriccion_no_iniciar_antes_recepcion(modelo, df_entregas, df_tareas, start, fn_comprimir)
+
+    # 4) Capacidad de zonas (similar a antes)
+    restriccion_capacidad_zonas(modelo, df_tareas, start, end)
+
+    # 5) Capacidad de operarios (simplificado a 8 operarios global)
+    restriccion_operarios(modelo, df_tareas, start, end)
+
+    # 6) Entrega a tiempo (minimizar retraso)
+    restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso, fn_comprimir)
+
+    # Función objetivo: minimizar la suma de retrasos
     modelo += pulp.lpSum(retraso.values()), "Minimize_Total_Tardiness"
 
     return modelo, start, end, retraso
@@ -286,15 +352,34 @@ def resolver_modelo(modelo):
     modelo.solve(pulp.PULP_CBC_CMD(msg=0))
     return modelo
 
-# -----------------------------------------------------------------------
-# 5) FLUJO PRINCIPAL
-# -----------------------------------------------------------------------
+# --------------------------------------------------------------------------------
+# 4) FLUJO PRINCIPAL
+# --------------------------------------------------------------------------------
 def main():
-    ruta = "archivos\db_dev\Datos_entrada_v5.xlsx"
-    datos = leer_datos(ruta)
+    # 1) Leer datos originales
+    ruta = "archivos\\db_dev\\Datos_entrada_v6.xlsx"
+    datos = leer_datos(ruta)  # Carga df_entregas, df_calend, df_tareas, etc.
+
+    # 2) Generar la compresión del calendario
+    intervals, fn_comp, fn_decomp, total_h = comprimir_calendario(datos["df_calend"])
+
+    # 3) Añadir esas funciones al dict de datos
+    datos["fn_comprimir"] = fn_comp
+    datos["fn_descomprimir"] = fn_decomp
+    datos["total_horas_comprimidas"] = total_h
+
+    # 4) Armar y resolver el modelo
     modelo, start, end, retraso = armar_modelo(datos)
     resolver_modelo(modelo)
-    escribir_resultados(modelo, start, end, ruta, datos["df_tareas"], datos["df_entregas"], datos["df_calend"])
+
+    # 5) Guardar resultados y generar Gantt
+    #    Se seguirán usando las funciones de utils, pero habrá que 
+    #    descomprimir 'start' y 'end' antes de volcarlos a Excel.
+    escribir_resultados(
+        modelo, start, end, ruta,
+        datos["df_tareas"], datos["df_entregas"], datos["df_calend"],
+        fn_decomp
+    )
 
 if __name__ == "__main__":
     main()
