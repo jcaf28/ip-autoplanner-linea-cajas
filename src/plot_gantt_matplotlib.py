@@ -4,7 +4,7 @@ import matplotlib.dates as mdates
 import seaborn as sns
 import mplcursors
 
-def plot_gantt(df_sol, df_entregas, df_calend):
+def plot_gantt_matplotlib(df_sol, df_entregas, df_calend):
 
     fig, ax = plt.subplots(figsize=(14, 6))
 

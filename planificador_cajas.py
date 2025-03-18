@@ -21,7 +21,7 @@ from datetime import datetime
 from src.utils import leer_datos, escribir_resultados
 
 # -----------------------------------------------------------------------
-# 2) APLICAR RESTRICCIONES ESPECÍFICAS
+# RESTRICCIONES 
 # -----------------------------------------------------------------------
 def restriccion_duracion(modelo, df_tareas, start, end, df_entregas):
     for _, row in df_tareas.iterrows():
@@ -285,11 +285,6 @@ def armar_modelo(datos):
 def resolver_modelo(modelo):
     modelo.solve(pulp.PULP_CBC_CMD(msg=0))
     return modelo
-
-# -----------------------------------------------------------------------
-# 4) EXPORTAR RESULTADOS
-# -----------------------------------------------------------------------
-
 
 # -----------------------------------------------------------------------
 # 5) FLUJO PRINCIPAL

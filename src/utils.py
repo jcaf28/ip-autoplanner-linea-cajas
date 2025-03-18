@@ -5,7 +5,8 @@ import pulp
 from datetime import datetime,timedelta
 import os
 
-from src.plot_gantt_matplotlib import plot_gantt
+from src.plot_gantt_matplotlib import plot_gantt_matplotlib
+from src.plot_gantt import plot_gantt
 
 def leer_datos(ruta_excel):
     """
@@ -38,7 +39,7 @@ def leer_datos(ruta_excel):
     }
     return datos
 
-def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend):
+def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend, fn_descomprimir):
     """
     Guarda los resultados de la planificación y genera el diagrama de Gantt.
     """
@@ -52,8 +53,9 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
     for (p, t), var_inicio in start.items():
         val_i = pulp.value(var_inicio)
         val_f = pulp.value(end[(p, t)])
-        dt_i = origen + timedelta(hours=float(val_i)) if val_i else None
-        dt_f = origen + timedelta(hours=float(val_f)) if val_f else None
+        dt_i = fn_descomprimir(val_i) if val_i is not None else None
+        dt_f = fn_descomprimir(val_f) if val_f is not None else None
+
 
         # Obtener ubicación y operarios asignados
         row = df_tareas[(df_tareas["material_padre"] == p) & (df_tareas["id_interno"] == t)].iloc[0]
@@ -74,7 +76,7 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
     df_sol = pd.DataFrame(filas)
 
     # Ruta base donde se guardará el archivo
-    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../archivos/bd_dev/output"))
+    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../archivos/db_dev/output"))
     os.makedirs(output_dir, exist_ok=True)  # Crea la carpeta si no existe
 
     # Generar timestamp y nueva ruta del archivo
@@ -90,4 +92,4 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
     print(f"Resultados guardados en: {new_file}")
 
     # Llamar a la función plot_gantt pasando df_entregas
-    plot_gantt(df_sol, df_entregas, df_calend)
+    plot_gantt_matplotlib(df_sol, df_entregas, df_calend)

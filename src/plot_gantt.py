@@ -1,6 +1,5 @@
 import plotly.express as px
 import pandas as pd
-import datetime
 
 def plot_gantt(df_sol, df_entregas, df_calend):
     # --- 1) TAREAS
