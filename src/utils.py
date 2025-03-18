@@ -2,7 +2,7 @@
 
 import pandas as pd
 import pulp
-from datetime import datetime,timedelta
+from datetime import datetime
 import os
 
 from src.plot_gantt_matplotlib import plot_gantt_matplotlib
@@ -21,9 +21,12 @@ def leer_datos(ruta_excel):
     df_entregas = pd.read_excel(xls, sheet_name="ENTREGAS")
     df_calend   = pd.read_excel(xls, sheet_name="CALENDARIO")
     df_tareas   = pd.read_excel(xls, sheet_name="TAREAS")
+    df_capacidades = pd.read_excel(xls, sheet_name="CAPACIDADES")
+    df_parametros = pd.read_excel(xls, sheet_name="PARAMETROS")
 
-    df_entregas["fecha_entrega"] = pd.to_datetime(df_entregas["fecha_entrega"])
-    df_entregas["fecha_recepcion_materiales"] = pd.to_datetime(df_entregas["fecha_recepcion_materiales"])
+    df_entregas["fecha_entrega"] = pd.to_datetime(df_entregas["fecha_entrega"], dayfirst=True)
+    df_entregas["fecha_recepcion_materiales"] = pd.to_datetime(df_entregas["fecha_recepcion_materiales"], dayfirst=True)
+
 
     df_calend["dia"] = pd.to_datetime(df_calend["dia"]).dt.date
 
@@ -31,12 +34,15 @@ def leer_datos(ruta_excel):
     tareas = df_tareas["id_interno"].unique().tolist()
 
     datos = {
-        "df_entregas": df_entregas,
-        "df_calend": df_calend,
-        "df_tareas": df_tareas,
-        "pedidos": pedidos,
-        "tareas": tareas
+    "df_entregas": df_entregas,
+    "df_calend": df_calend,
+    "df_tareas": df_tareas,
+    "df_capacidades": df_capacidades,
+    "df_parametros": df_parametros,
+    "pedidos": pedidos,
+    "tareas": tareas
     }
+
     return datos
 
 def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend, fn_descomprimir):
@@ -93,3 +99,58 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
 
     # Llamar a la función plot_gantt pasando df_entregas
     plot_gantt_matplotlib(df_sol, df_entregas, df_calend)
+
+def check_situacion_inicial(df_tareas, df_capacidades, verbose=True):
+    """
+    FUNCIÓN PARA DETECTAR SI LA SITUACIÓN DE ARRANQUE ES VÁLIDA
+    Verifica la coherencia de la situación inicial de las tareas.
+    1) Detecta qué tareas "ocupan posición" (las que tienen 0% < completada_porcentaje < 100%).
+    2) Asegura que en cada ubicación no se supere la capacidad definida en CAPACIDADES.
+    3) Revisa que no se viole el orden de predecesoras: si una tarea está al 100%,
+       todas sus predecesoras deben estar también al 100%.
+    Lanza ValueError si detecta inconsistencias.
+    """
+    # Convertir las capacidades a diccionario {nom_ubicacion: capacidad}
+    dict_cap = df_capacidades.set_index("nom_ubicacion")["capacidad"].to_dict()
+    
+    # 1) Detectar tareas en curso (completadas parcialmente)
+    df_ocupando = df_tareas[(df_tareas["completada_porcentaje"] > 0) & 
+                            (df_tareas["completada_porcentaje"] < 1)]
+    
+    # Verificar que en cada ubicación no se supere la capacidad
+    if not df_ocupando.empty:
+        g = df_ocupando.groupby("nom_ubicacion").size()
+        for ubicacion, num in g.items():
+            capacidad = dict_cap.get(ubicacion, 1)
+            if num > capacidad:
+                raise ValueError(
+                    f"La ubicación '{ubicacion}' tiene {num} tareas en curso (completada entre 0% y 100%), "
+                    f"pero su capacidad es {capacidad}. Supera la capacidad permitida."
+                )
+                
+    # 2) Chequeo del orden de predecesoras:
+    completado = {}
+    for _, row in df_tareas.iterrows():
+        mat = row["material_padre"]
+        tid = row["id_interno"]
+        pct = row.get("completada_porcentaje", 0.0)
+        completado[(mat, tid)] = pct
+
+    for _, row in df_tareas.iterrows():
+        mat = row["material_padre"]
+        tid = row["id_interno"]
+        pct_tarea = completado[(mat, tid)]
+        
+        if pct_tarea >= 1.0 and not pd.isnull(row["predecesora"]):
+            lista_preds = [int(x.strip()) for x in str(row["predecesora"]).split(";")]
+            for p_id in lista_preds:
+                pct_pred = completado.get((mat, p_id), 0.0)
+                if pct_pred < 1.0:
+                    raise ValueError(
+                        f"La tarea {tid} se indica al 100% completada, pero su predecesora {p_id} "
+                        f"del material {mat} no está al 100%. Violación de orden."
+                    )
+
+    if verbose:
+        print("check_situacion_inicial: Situación inicial verificada con éxito.")
+    return True

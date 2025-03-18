@@ -2,7 +2,7 @@ import pandas as pd
 import pulp
 from datetime import datetime, timedelta
 
-from src.utils import leer_datos, escribir_resultados
+from src.utils import leer_datos, escribir_resultados, check_situacion_inicial
 
 # --------------------------------------------------------------------------------
 # 1) COMPRESIÓN Y DESCOMPRESIÓN DEL CALENDARIO
@@ -247,7 +247,7 @@ def restriccion_capacidad_zonas(modelo, df_tareas, start, end):
         modelo += start[(mi, ti)] >= end[(mj, tj)] - M * order_zona[(mi, ti, mj, tj)]
 
 
-def restriccion_operarios(modelo, df_tareas, start, end):
+def restriccion_operarios(modelo, df_tareas, start, end, df_parametros):
     """
     Cantidad de operarios fija = 8. 
     Se hace un control pairwise: si la suma de n_ops (tarea i + tarea j) > 8, 
@@ -256,7 +256,7 @@ def restriccion_operarios(modelo, df_tareas, start, end):
     NOTA: Esto es un enfoque simplificado. Si quieres permitir que 3 ó más tareas se 
     solapen (siempre que la suma no supere 8), habría que modelar de forma más compleja.
     """
-    MAX_OP = 8
+    MAX_OP = int(df_parametros.loc[df_parametros["parametro"] == "cant_operarios", "valor"].iloc[0])
     M = 1e5
     order_ops = {}
 
@@ -338,7 +338,7 @@ def armar_modelo(datos):
     restriccion_capacidad_zonas(modelo, df_tareas, start, end)
 
     # 5) Capacidad de operarios (simplificado a 8 operarios global)
-    restriccion_operarios(modelo, df_tareas, start, end)
+    restriccion_operarios(modelo, df_tareas, start, end, datos["df_parametros"])
 
     # 6) Entrega a tiempo (minimizar retraso)
     restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso, fn_comprimir)
@@ -356,25 +356,26 @@ def resolver_modelo(modelo):
 # 4) FLUJO PRINCIPAL
 # --------------------------------------------------------------------------------
 def main():
-    # 1) Leer datos originales
+    # 1) Leer datos originales (ahora se incluyen df_capacidades y df_parametros)
     ruta = "archivos\\db_dev\\Datos_entrada_v6.xlsx"
-    datos = leer_datos(ruta)  # Carga df_entregas, df_calend, df_tareas, etc.
-
+    datos = leer_datos(ruta)  # Se esperan: df_entregas, df_calend, df_tareas, df_capacidades, etc.
+    
+    # Chequear la situación inicial utilizando la capacidad paramétrica de CAPACIDADES
+    check_situacion_inicial(datos["df_tareas"], datos["df_capacidades"])
+    
     # 2) Generar la compresión del calendario
     intervals, fn_comp, fn_decomp, total_h = comprimir_calendario(datos["df_calend"])
-
-    # 3) Añadir esas funciones al dict de datos
+    
+    # 3) Añadir las funciones de compresión al dict de datos
     datos["fn_comprimir"] = fn_comp
     datos["fn_descomprimir"] = fn_decomp
     datos["total_horas_comprimidas"] = total_h
-
+    
     # 4) Armar y resolver el modelo
     modelo, start, end, retraso = armar_modelo(datos)
     resolver_modelo(modelo)
-
-    # 5) Guardar resultados y generar Gantt
-    #    Se seguirán usando las funciones de utils, pero habrá que 
-    #    descomprimir 'start' y 'end' antes de volcarlos a Excel.
+    
+    # 5) Guardar resultados y generar Gantt (descomprimir start y end para Excel)
     escribir_resultados(
         modelo, start, end, ruta,
         datos["df_tareas"], datos["df_entregas"], datos["df_calend"],
