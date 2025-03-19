@@ -372,30 +372,27 @@ def resolver_modelo(modelo):
 # 4) FLUJO PRINCIPAL
 # --------------------------------------------------------------------------------
 def main():
-    # 1) Leer datos originales (ahora se incluyen df_capacidades y df_parametros)
     ruta = "archivos\\db_dev\\Datos_entrada_v6.xlsx"
-    datos = leer_datos(ruta)  # Se esperan: df_entregas, df_calend, df_tareas, df_capacidades, etc.
+    datos = leer_datos(ruta)
     
-    # Chequear la situación inicial utilizando la capacidad paramétrica de CAPACIDADES
+    # (Si filtras tareas 100% completadas, hazlo aquí o deja que se representen con duración 0)
+    # datos["df_tareas"] = datos["df_tareas"][datos["df_tareas"]["completada_porcentaje"] < 1]
+    
     check_situacion_inicial(datos["df_tareas"], datos["df_capacidades"])
     
-    # 2) Generar la compresión del calendario
     intervals, fn_comp, fn_decomp, total_h = comprimir_calendario(datos["df_calend"])
-    
-    # 3) Añadir las funciones de compresión al dict de datos
     datos["fn_comprimir"] = fn_comp
     datos["fn_descomprimir"] = fn_decomp
     datos["total_horas_comprimidas"] = total_h
     
-    # 4) Armar y resolver el modelo
     modelo, start, end, retraso = armar_modelo(datos)
     resolver_modelo(modelo)
     
-    # 5) Guardar resultados y generar Gantt (descomprimir start y end para Excel)
     escribir_resultados(
         modelo, start, end, ruta,
         datos["df_tareas"], datos["df_entregas"], datos["df_calend"],
-        fn_decomp
+        fn_decomp,
+        datos["df_capacidades"]  # Pasamos el DataFrame de capacidades
     )
 
 if __name__ == "__main__":

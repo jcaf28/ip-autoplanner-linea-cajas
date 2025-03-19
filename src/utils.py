@@ -45,10 +45,13 @@ def leer_datos(ruta_excel):
 
     return datos
 
-def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend, fn_descomprimir):
+def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend, fn_descomprimir, df_capacidades):
     """
     Guarda los resultados de la planificación y genera el diagrama de Gantt.
     """
+    import os
+    from datetime import datetime
+    import pulp
 
     estado = pulp.LpStatus[modelo.status]
     print(f"Estado del solver: {estado}")
@@ -59,11 +62,15 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
     for (p, t), var_inicio in start.items():
         val_i = pulp.value(var_inicio)
         val_f = pulp.value(end[(p, t)])
+
+        # Se omiten tareas con duración 0
+        if val_i is None or val_f is None or (val_f - val_i) == 0:
+            continue
+
         dt_i = fn_descomprimir(val_i) if val_i is not None else None
         dt_f = fn_descomprimir(val_f) if val_f is not None else None
 
-
-        # Obtener ubicación y operarios asignados
+        # Obtener datos de la tarea
         row = df_tareas[(df_tareas["material_padre"] == p) & (df_tareas["id_interno"] == t)].iloc[0]
         ubicacion = row["nom_ubicacion"]
         n_ops = int(row["num_operarios_fijos"]) if not pd.isnull(row["num_operarios_fijos"]) else 1
@@ -81,24 +88,26 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
 
     df_sol = pd.DataFrame(filas)
 
-    # Ruta base donde se guardará el archivo
+    # Guardar resultados en Excel
     output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../archivos/db_dev/output"))
-    os.makedirs(output_dir, exist_ok=True)  # Crea la carpeta si no existe
-
-    # Generar timestamp y nueva ruta del archivo
+    os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.basename(ruta_excel)  # Extrae solo el nombre del archivo original
-    base, ext = os.path.splitext(filename)  # Separa nombre y extensión de archivo
-    new_file = os.path.join(output_dir, f"{base}_{timestamp}{ext}")  # Ensambla nueva ruta
+    filename = os.path.basename(ruta_excel)
+    base, ext = os.path.splitext(filename)
+    new_file = os.path.join(output_dir, f"{base}_{timestamp}{ext}")
 
-    # Guardar el DataFrame en Excel
     with pd.ExcelWriter(new_file, engine="openpyxl", mode="w") as writer:
         df_sol.to_excel(writer, sheet_name="RESULTADOS", index=False)
 
     print(f"Resultados guardados en: {new_file}")
 
-    # Llamar a la función plot_gantt pasando df_entregas
-    plot_gantt_matplotlib(df_sol, df_entregas, df_calend)
+    # Generar la lista de ubicaciones ordenada según df_capacidades
+    ordered_locations = df_capacidades.sort_values("ubicación")["nom_ubicacion"].tolist()
+
+    # Llamar a la función del Gantt pasando ordered_locations
+    from src.plot_gantt_matplotlib import plot_gantt_matplotlib
+    plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations)
+
 
 def check_situacion_inicial(df_tareas, df_capacidades, verbose=True):
     """
