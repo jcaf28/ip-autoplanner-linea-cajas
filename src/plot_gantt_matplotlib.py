@@ -4,12 +4,6 @@ import matplotlib.dates as mdates
 import seaborn as sns
 import mplcursors
 
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import seaborn as sns
-import mplcursors
-
 def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations):
     """
     Genera el diagrama de Gantt utilizando el orden de ubicaciones definido en ordered_locations.

@@ -387,7 +387,7 @@ def main():
     start_time = time.time()  # Marca inicial de tiempo
 
     print("🔹 Cargando datos de entrada...")
-    ruta = "archivos\db_dev\Datos_entrada_v8.xlsx"
+    ruta = "archivos\db_dev\Datos_entrada_v9.xlsx"
     datos = leer_datos(ruta)
     print(f"✅ Datos cargados en {time.time() - start_time:.2f} segundos.")
 
