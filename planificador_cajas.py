@@ -372,11 +372,8 @@ def resolver_modelo(modelo):
 # 4) FLUJO PRINCIPAL
 # --------------------------------------------------------------------------------
 def main():
-    ruta = "archivos\\db_dev\\Datos_entrada_v6.xlsx"
+    ruta = "./archivos/db_dev/versions/Datos_entrada_v7.xlsx"
     datos = leer_datos(ruta)
-    
-    # (Si filtras tareas 100% completadas, hazlo aquí o deja que se representen con duración 0)
-    # datos["df_tareas"] = datos["df_tareas"][datos["df_tareas"]["completada_porcentaje"] < 1]
     
     check_situacion_inicial(datos["df_tareas"], datos["df_capacidades"])
     
