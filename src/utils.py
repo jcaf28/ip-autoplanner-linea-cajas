@@ -108,7 +108,6 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
     from src.plot_gantt_matplotlib import plot_gantt_matplotlib
     plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations)
 
-
 def check_situacion_inicial(df_tareas, df_capacidades, verbose=True):
     """
     FUNCIÓN PARA DETECTAR SI LA SITUACIÓN DE ARRANQUE ES VÁLIDA

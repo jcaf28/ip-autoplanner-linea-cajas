@@ -418,17 +418,12 @@ def main():
     print(f"✅ Modelo resuelto en {time.time() - solver_start:.2f} segundos.")
 
     print("🔹 Guardando resultados y generando diagrama de Gantt...")
-    results_start = time.time()
     escribir_resultados(
         modelo, start, end, ruta,
         datos["df_tareas"], datos["df_entregas"], datos["df_calend"],
         fn_decomp,
         datos["df_capacidades"]  # Pasamos el DataFrame de capacidades
     )
-    print(f"✅ Resultados guardados en {time.time() - results_start:.2f} segundos.")
-
-    total_time = time.time() - start_time
-    print(f"🏁 **Ejecución completa en {total_time:.2f} segundos.**")
 
 if __name__ == "__main__":
     main()
