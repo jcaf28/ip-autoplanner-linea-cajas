@@ -1,18 +1,23 @@
+# PATH: src/plot_gantt_matplotlib.py
+
+import os
+import pickle
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
 import mplcursors
 
-def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations):
+def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations, save_path=None):
     """
-    Genera el diagrama de Gantt utilizando el orden de ubicaciones definido en ordered_locations.
-    
+    Genera el diagrama de Gantt y, opcionalmente, lo guarda como objeto interactivo en un archivo .pkl.
+
     Parámetros:
       - df_sol: DataFrame con la planificación.
       - df_entregas: DataFrame con fechas de entrega.
       - df_calend: DataFrame con los turnos.
       - ordered_locations: Lista de nombres de ubicaciones en el orden deseado.
+      - save_path: Ruta donde guardar la figura en formato .pkl (None para no guardar).
     """
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -30,19 +35,17 @@ def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations):
     palette = sns.color_palette("Set2", n_colors=len(pedidos_unicos))
     color_map = {pedido: palette[i % len(pedidos_unicos)] for i, pedido in enumerate(pedidos_unicos)}
 
-    # Aquí usamos directamente ordered_locations para asignar la posición Y
     ubicacion_dict = {ubic: i for i, ubic in enumerate(ordered_locations)}
 
     artists = []
     tooltips = []
 
-    # Dibujar las barras de tareas
+    # Barras de tareas
     for _, row in df_sol.iterrows():
         pedido = row["pedido"]
         color = color_map.get(pedido, "gray")
-        # Obtener la posición según ordered_locations (si la tarea aparece, de lo contrario se ignora)
         if row["ubicacion"] not in ubicacion_dict:
-            continue  # Si la tarea tiene una ubicación que no está en el orden, se omite
+            continue
         y_pos = ubicacion_dict[row["ubicacion"]]
 
         bar = ax.barh(
@@ -53,8 +56,8 @@ def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations):
             edgecolor="black",
             alpha=0.8
         )
-
         ax.text(row["datetime_inicio"], y_pos, f"T{row['tarea']}", va="center", fontsize=7)
+
         artists.append(bar[0])
         tooltip = (
             f"[Tarea: T{row['tarea']}]\n"
@@ -71,27 +74,23 @@ def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations):
         pedido = row["referencia"]
         color = color_map.get(pedido, "gray")
 
-        # Recepción
         fecha_rec = row["fecha_recepcion_materiales"]
         line_rec = ax.axvline(fecha_rec, color=color, linestyle="dashed", lw=1.5, alpha=0.8)
         artists.append(line_rec)
         ttip_rec = (
-            f"[Recepción]\nPedido: {pedido}\n"
-            f"Fecha: {fecha_rec:%Y-%m-%d %H:%M}"
+            f"[Recepción]\nPedido: {pedido}\nFecha: {fecha_rec:%Y-%m-%d %H:%M}"
         )
         tooltips.append(ttip_rec)
 
-        # Entrega
         fecha_ent = row["fecha_entrega"]
         line_ent = ax.axvline(fecha_ent, color=color, linestyle="dashed", lw=1.5, alpha=0.8)
         artists.append(line_ent)
         ttip_ent = (
-            f"[Entrega]\nPedido: {pedido}\n"
-            f"Fecha: {fecha_ent:%Y-%m-%d %H:%M}"
+            f"[Entrega]\nPedido: {pedido}\nFecha: {fecha_ent:%Y-%m-%d %H:%M}"
         )
         tooltips.append(ttip_ent)
 
-    # Usar ordered_locations para fijar el eje Y
+    # Ajustes finales
     ax.set_yticks(range(len(ordered_locations)))
     ax.set_yticklabels(ordered_locations)
     ax.set_xlabel("Fecha y Hora")
@@ -101,7 +100,7 @@ def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations):
     plt.xticks(rotation=45)
     plt.tight_layout()
 
-    # Tooltips interactivos
+    # Crear cursor interactivo
     cursor = mplcursors.cursor(artists, hover=True, highlight=True, multiple=False)
     @cursor.connect("add")
     def on_add(sel):
@@ -109,5 +108,13 @@ def plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations):
         sel.annotation.set_text(tooltips[i])
         sel.annotation.get_bbox_patch().set(fc="white", alpha=0.8)
 
-    plt.show()
+    # Guardar la figura si save_path no es None
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        # Guardar (fig, artists, tooltips) en un .pkl
+        with open(save_path, "wb") as f:
+            pickle.dump((fig, artists, tooltips), f)
+        print(f"📌 Figura de Gantt guardada en: {save_path}")
 
+    # Mostrar la figura
+    plt.show(block=True)

@@ -105,8 +105,9 @@ def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, 
     ordered_locations = df_capacidades.sort_values("ubicación")["nom_ubicacion"].tolist()
 
     # Llamar a la función del Gantt pasando ordered_locations
-    from src.plot_gantt_matplotlib import plot_gantt_matplotlib
-    plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    gantt_file = os.path.join(output_dir, "gantt", f"gantt_{timestamp}.pkl")
+    plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations, save_path=gantt_file)
 
 def check_situacion_inicial(df_tareas, df_capacidades, verbose=True):
     """
@@ -162,3 +163,40 @@ def check_situacion_inicial(df_tareas, df_capacidades, verbose=True):
     if verbose:
         print("check_situacion_inicial: Situación inicial verificada con éxito.")
     return True
+
+def load_and_show_gantt():
+    """
+    Carga y muestra el último diagrama de Gantt guardado con interactividad.
+    """
+    import os
+    import pickle
+    import mplcursors
+    import matplotlib.pyplot as plt
+    
+    gantt_dir = "archivos/db_dev/output/gantt"
+    # Buscar .pkl ordenados por fecha
+    gantt_files = sorted(
+        [f for f in os.listdir(gantt_dir) if f.endswith(".pkl")],
+        key=lambda x: os.path.getmtime(os.path.join(gantt_dir, x))
+    )
+    if not gantt_files:
+        print("❌ No hay diagramas de Gantt guardados.")
+        return
+
+    latest_gantt = os.path.join(gantt_dir, gantt_files[-1])  # Último .pkl
+    with open(latest_gantt, "rb") as f:
+        fig, artists, tooltips = pickle.load(f)
+
+    print(f"📌 Cargando diagrama: {latest_gantt}")
+
+    # Regenerar la interactividad de mplcursors
+    cursor = mplcursors.cursor(artists, hover=True, highlight=True, multiple=False)
+    @cursor.connect("add")
+    def on_add(sel):
+        i = artists.index(sel.artist)
+        sel.annotation.set_text(tooltips[i])
+        sel.annotation.get_bbox_patch().set(fc="white", alpha=0.8)
+
+    # fig.show() no siempre funciona en scripts; necesitamos reanexar fig a pyplot:
+    plt.figure(fig.number)
+    plt.show(block=True)
