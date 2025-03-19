@@ -276,7 +276,7 @@ def restriccion_capacidad_zonas(modelo, df_tareas, start, end):
 
 def restriccion_operarios(modelo, df_tareas, start, end, df_parametros):
     """
-    Cantidad de operarios fija = 8. 
+    Cantidad de operarios fija, determinada en los parámetros de. 
     Se hace un control pairwise: si la suma de n_ops (tarea i + tarea j) > 8, 
     entonces dichas tareas no pueden solaparse.
     
@@ -362,7 +362,6 @@ def armar_modelo(datos):
     modelo += pulp.lpSum(retraso.values()), "Minimize_Total_Tardiness"
 
     return modelo, start, end, retraso
-
 
 
 def resolver_modelo(modelo):
