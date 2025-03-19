@@ -1,6 +1,7 @@
 import pandas as pd
 import pulp
 from datetime import datetime, timedelta
+import time
 
 from src.utils import leer_datos, escribir_resultados, check_situacion_inicial
 
@@ -365,32 +366,69 @@ def armar_modelo(datos):
 
 
 def resolver_modelo(modelo):
-    modelo.solve(pulp.PULP_CBC_CMD(msg=0))
+    solver = pulp.PULP_CBC_CMD(
+        msg=True,        # Activa logs detallados
+        timeLimit=120,   # Máximo 2 minutos
+        gapRel=0.05,     # Permite soluciones con un 5% de tolerancia respecto al óptimo
+        presolve=True,   # Reduce tamaño del problema antes de resolver
+        cuts=True,       # Habilita generación de cortes adicionales
+        mip=True         # Indica que estamos resolviendo un problema de programación entera
+    )
+    modelo.solve(solver)
     return modelo
+
 
 # --------------------------------------------------------------------------------
 # 4) FLUJO PRINCIPAL
 # --------------------------------------------------------------------------------
+import time
+
 def main():
-    ruta = "./archivos/db_dev/versions/Datos_entrada_v7.xlsx"
+    start_time = time.time()  # Marca inicial de tiempo
+
+    print("🔹 Cargando datos de entrada...")
+    ruta = "archivos\db_dev\Datos_entrada_v8.xlsx"
     datos = leer_datos(ruta)
-    
+    print(f"✅ Datos cargados en {time.time() - start_time:.2f} segundos.")
+
+    print("🔹 Verificando consistencia de la situación inicial...")
     check_situacion_inicial(datos["df_tareas"], datos["df_capacidades"])
-    
+    print(f"✅ Situación inicial verificada en {time.time() - start_time:.2f} segundos.")
+
+    print("🔹 Comprimiendo calendario de turnos...")
+    cal_start = time.time()
     intervals, fn_comp, fn_decomp, total_h = comprimir_calendario(datos["df_calend"])
     datos["fn_comprimir"] = fn_comp
     datos["fn_descomprimir"] = fn_decomp
     datos["total_horas_comprimidas"] = total_h
-    
+    print(f"✅ Compresión del calendario completada en {time.time() - cal_start:.2f} segundos.")
+
+    print("🔹 Armando modelo de optimización...")
+    model_start = time.time()
     modelo, start, end, retraso = armar_modelo(datos)
+    print(f"✅ Modelo armado en {time.time() - model_start:.2f} segundos.")
+
+    print("🔹 Guardando modelo en archivos para depuración...")
+    modelo.writeLP("debug_model.lp")  # Guardar modelo en formato LP
+    modelo.writeMPS("debug_model.mps")  # Guardar modelo en formato MPS
+
+    print("🔹 Resolviendo modelo de optimización...")
+    solver_start = time.time()
     resolver_modelo(modelo)
-    
+    print(f"✅ Modelo resuelto en {time.time() - solver_start:.2f} segundos.")
+
+    print("🔹 Guardando resultados y generando diagrama de Gantt...")
+    results_start = time.time()
     escribir_resultados(
         modelo, start, end, ruta,
         datos["df_tareas"], datos["df_entregas"], datos["df_calend"],
         fn_decomp,
         datos["df_capacidades"]  # Pasamos el DataFrame de capacidades
     )
+    print(f"✅ Resultados guardados en {time.time() - results_start:.2f} segundos.")
+
+    total_time = time.time() - start_time
+    print(f"🏁 **Ejecución completa en {total_time:.2f} segundos.**")
 
 if __name__ == "__main__":
     main()
