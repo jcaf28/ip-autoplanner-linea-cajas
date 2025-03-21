@@ -22,8 +22,6 @@ def leer_datos(ruta_excel):
     df_calend   = pd.read_excel(xls, sheet_name="CALENDARIO")
     df_tareas   = pd.read_excel(xls, sheet_name="TAREAS")
     df_capacidades = pd.read_excel(xls, sheet_name="CAPACIDADES")
-    df_parametros = pd.read_excel(xls, sheet_name="PARAMETROS")
-
     df_entregas["fecha_entrega"] = pd.to_datetime(df_entregas["fecha_entrega"], dayfirst=True)
     df_entregas["fecha_recepcion_materiales"] = pd.to_datetime(df_entregas["fecha_recepcion_materiales"], dayfirst=True)
 
@@ -38,7 +36,6 @@ def leer_datos(ruta_excel):
     "df_calend": df_calend,
     "df_tareas": df_tareas,
     "df_capacidades": df_capacidades,
-    "df_parametros": df_parametros,
     "pedidos": pedidos,
     "tareas": tareas
     }
