@@ -35,25 +35,27 @@ def construir_estructura_tareas(df_tareas, df_capac):
             tid = rowt["id_interno"]
             loc = int(rowt["ubicación"])
             tipo = str(rowt["tipo_tarea"])
-            base_op = rowt["tiempo_operario"]  # en horas o lo que corresponda
+            base_op = rowt["tiempo_operario"]  # en horas
             t_verif = rowt["tiempo_verificado"]
             nmax = int(rowt["num_operarios_max"])
 
-            # Usaremos "tiempo_base" solo para OPERATIVA
-            # Para VERIFICADO (o cualquier otra) aquí un ejemplo simplificado.
-            # Lo normal es que verificado no necesite 'x_t' operarios. Ajusta según tu caso real.
             if tipo == "OPERATIVA":
-                # Convertimos a minutos
+                # Para tareas operativas, requerimos al menos 1 operario
                 tiempo_base = math.ceil(base_op * 60)
+                min_op = 1
+                max_op = nmax
             elif tipo == "VERIFICADO":
-                # Supongamos verificado no cambia con #operarios, forzamos x_t=1 y dur fijo
+                # Para tareas de verificado, no se necesitan operarios
                 tiempo_base = math.ceil(t_verif * 60)
-                nmax = 1
+                min_op = 0
+                max_op = 0
             else:
                 tiempo_base = 0
-                nmax = 1
+                min_op = 0
+                max_op = 0
 
-            job_dict[pedido].append((tid, loc, tiempo_base, nmax, tipo))
+            # Ahora agregamos 6 elementos en el tuple
+            job_dict[pedido].append((tid, loc, tiempo_base, min_op, max_op, tipo))
 
         for _, rowt in grupo.iterrows():
             current_id = rowt["id_interno"]
@@ -80,59 +82,42 @@ def crear_modelo_cp(job_dict,
                     capacity_per_interval):
     model = cp_model.CpModel()
     all_vars = {}
-    # Estructura:
-    # all_vars[(pedido, t_idx)] = {
-    #    "start": start_var,
-    #    "end": end_var,
-    #    "interval": interval_var,
-    #    "x_op": x_t,  (n operarios asignados)
-    #    "duration": duration_var,
-    #    "machine": machine_id
-    # }
-
     horizon = 0
     for pedido, tasks in job_dict.items():
-        for (_, _, tiempo_base, _, _) in tasks:
+        for (_, _, tiempo_base, _, _, _) in tasks:
             horizon += max(1, tiempo_base)
-
     if horizon < 1:
         horizon = 1
 
     machine_to_intervals = collections.defaultdict(list)
 
     for pedido, tasks in job_dict.items():
-        for t_idx, (tid, machine_id, tiempo_base, nmax, tipo) in enumerate(tasks):
-            # Definimos la variable x_op en [1..nmax]
-            x_op = model.NewIntVar(1, nmax, f"xop_{pedido}_{tid}")
+        for t_idx, (tid, machine_id, tiempo_base, min_op, max_op, tipo) in enumerate(tasks):
+            if min_op == max_op == 0:
+                # Tarea de verificado: no consume operarios
+                x_op = model.NewIntVar(0, 0, f"xop_{pedido}_{tid}")
+                duration_var = model.NewConstant(tiempo_base)
+            else:
+                x_op = model.NewIntVar(min_op, max_op, f"xop_{pedido}_{tid}")
+                # Calculamos las duraciones posibles en función de x_op
+                # NOTA: si x_op parte de 1, usamos ese valor; si se requiere un ajuste por min_op, habría que desplazar el índice
+                dur_x = []
+                for x in range(min_op, max_op + 1):
+                    if tiempo_base > 0:
+                        val = math.ceil(tiempo_base / x)
+                    else:
+                        val = tiempo_base
+                    dur_x.append(val)
+                dur_min = min(dur_x) if dur_x else 0
+                dur_max = max(dur_x) if dur_x else 0
+                duration_var = model.NewIntVar(dur_min, dur_max, f"dur_{pedido}_{tid}")
+                # Ajustamos el índice en AddElement: si x_op parte de min_op, se usa (x_op - min_op)
+                model.AddElement(x_op - min_op, dur_x, duration_var)
 
-            # Calculamos las duraciones posibles en función de x_op
-            # dur_x[x - 1] = ceil(tiempo_base / x)
-            dur_x = []
-            for x in range(1, nmax+1):
-                if tiempo_base > 0:
-                    val = math.ceil(tiempo_base / x)
-                else:
-                    val = tiempo_base
-                dur_x.append(val)
-
-            # Definimos la variable de duración real
-            dur_min = min(dur_x) if dur_x else 0
-            dur_max = max(dur_x) if dur_x else 0
-            duration_var = model.NewIntVar(dur_min, dur_max, f"dur_{pedido}_{tid}")
-
-            # Vinculamos duration_var a x_op mediante constraint AddElement
-            # AddElement(index, array, target)
-            # index = x_op - 1 (porque x_op va de 1..nmax)
-            # array = dur_x
-            # target = duration_var
-            model.AddElement(x_op - 1, dur_x, duration_var)
-
-            # Definimos start, end e interval
             start_var = model.NewIntVar(0, horizon, f"start_{pedido}_{tid}")
             end_var   = model.NewIntVar(0, horizon, f"end_{pedido}_{tid}")
             interval_var = model.NewIntervalVar(start_var, duration_var, end_var,
                                                 f"interval_{pedido}_{tid}")
-
             all_vars[(pedido, t_idx)] = {
                 "start": start_var,
                 "end": end_var,
@@ -309,11 +294,13 @@ if __name__ == "__main__":
     ruta = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
     sol_tareas, sol_intervals = planificar(ruta)
 
+    # Ocupación de operarios
+    fig_operarios = trazar_ocupacion_operarios(sol_intervals)
+    fig_operarios.show()
+
     # Gantt de tareas
     fig_gantt = generar_diagrama_gantt(sol_tareas)
     fig_gantt.show()
 
-    # Ocupación de operarios
-    fig_operarios = trazar_ocupacion_operarios(sol_intervals)
-    fig_operarios.show()
+    
 

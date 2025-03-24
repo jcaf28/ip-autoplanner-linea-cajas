@@ -1,25 +1,35 @@
 # PATH: src/plot_gantt.py
 
-def generar_diagrama_gantt(sol_tareas):
-    import plotly.express as px
-    import pandas as pd
+import plotly.graph_objects as go
+import pandas as pd
 
+def generar_diagrama_gantt(sol_tareas):
     df = pd.DataFrame(sol_tareas)
-    df["machine"] = df["machine"].astype(str)
     df["pedido_tarea"] = df["pedido"] + "_" + df["t_idx"].astype(str)
 
-    fig = px.timeline(
-        df,
-        x_start="start",
-        x_end="end",
-        y="machine",                   # cada fila del diagrama = máquina
-        color="pedido_tarea",         # cada tarea se pinta con un color diferente
-        hover_data=["x_op", "duration"]
+    fig = go.Figure()
+
+    for _, row in df.iterrows():
+        fig.add_trace(go.Bar(
+            x=[row["end"] - row["start"]],
+            y=[str(row["machine"])],
+            base=row["start"],
+            orientation='h',
+            name=row["pedido_tarea"],
+            hovertemplate=f"{row['pedido_tarea']}<br>Máquina: {row['machine']}<br>Inicio: {row['start']}<br>Fin: {row['end']}<br>Operarios: {row['x_op']}"
+        ))
+
+    fig.update_layout(
+        barmode='stack',
+        title="Diagrama de Gantt - Planificación de tareas",
+        xaxis_title="Tiempo (minutos)",
+        yaxis_title="Máquina",
+        yaxis=dict(autorange="reversed"),
+        height=600
     )
-    fig.update_yaxes(autorange="reversed")
-    fig.update_xaxes(type="linear")   # trata start/end como ejes numéricos
-    fig.update_layout(title="Diagrama de Gantt - Planificación de tareas")
+
     return fig
+
 
 
 def trazar_ocupacion_operarios(sol_intervals):
