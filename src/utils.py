@@ -67,6 +67,7 @@ def comprimir_calendario(df_calend):
         acumulado += dur_min
 
     return intervals, capacity_per_interval
+
 def imprimir_solucion(sol, makespan):
     print("=== SOLUCIÓN ===")
     print(f"Makespan: {makespan}")
