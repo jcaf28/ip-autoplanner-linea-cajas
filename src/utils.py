@@ -1,199 +1,109 @@
 # PATH: src/utils.py
 
 import pandas as pd
-import pulp
-from datetime import datetime
-import os
+from datetime import datetime, timedelta
 
-from src.plot_gantt_matplotlib import plot_gantt_matplotlib
-from src.plot_gantt import plot_gantt
+# ==================================================
+# 1) UTILIDADES DE LECTURA Y CALENDARIO
+# ==================================================
 
 def leer_datos(ruta_excel):
-    """
-    Lee datos de:
-      - ENTREGAS: referencia, fecha_entrega, fecha_recepcion_materiales
-      - CALENDARIO: dia, turno, hora_inicio, hora_fin, cantidad_operarios
-      - TAREAS: id_interno, predecesora(s), ubicacion, tiempo_operario, tiempo_robot, tiempo_verificado
-    Devuelve un dict con dataframes y listas útiles.
-    """
     xls = pd.ExcelFile(ruta_excel)
-
     df_entregas = pd.read_excel(xls, sheet_name="ENTREGAS")
     df_calend   = pd.read_excel(xls, sheet_name="CALENDARIO")
     df_tareas   = pd.read_excel(xls, sheet_name="TAREAS")
     df_capacidades = pd.read_excel(xls, sheet_name="CAPACIDADES")
+
     df_entregas["fecha_entrega"] = pd.to_datetime(df_entregas["fecha_entrega"], dayfirst=True)
     df_entregas["fecha_recepcion_materiales"] = pd.to_datetime(df_entregas["fecha_recepcion_materiales"], dayfirst=True)
-
-
     df_calend["dia"] = pd.to_datetime(df_calend["dia"]).dt.date
+
+    # Rellenar NaN numéricos en df_tareas
+    col_num = ["tiempo_operario", "tiempo_verificado", "num_operarios_max"]
+    for c in col_num:
+        if c in df_tareas.columns:
+            df_tareas[c] = df_tareas[c].fillna(0)
 
     pedidos = df_entregas["referencia"].unique().tolist()
     tareas = df_tareas["id_interno"].unique().tolist()
 
     datos = {
-    "df_entregas": df_entregas,
-    "df_calend": df_calend,
-    "df_tareas": df_tareas,
-    "df_capacidades": df_capacidades,
-    "pedidos": pedidos,
-    "tareas": tareas
+        "df_entregas": df_entregas,
+        "df_calend": df_calend,
+        "df_tareas": df_tareas,
+        "df_capacidades": df_capacidades,
+        "pedidos": pedidos,
+        "tareas": tareas
     }
-
     return datos
 
-def escribir_resultados(modelo, start, end, ruta_excel, df_tareas, df_entregas, df_calend, fn_descomprimir, df_capacidades):
-    """
-    Guarda los resultados de la planificación y genera el diagrama de Gantt.
-    """
-    import os
-    from datetime import datetime
-    import pulp
+def comprimir_calendario(df_calend):
+    df_calend = df_calend.copy()
+    df_calend = df_calend.sort_values(by=["dia", "hora_inicio"])
+    intervals = []
+    capacity_per_interval = []
+    acumulado = 0
 
-    estado = pulp.LpStatus[modelo.status]
-    print(f"Estado del solver: {estado}")
+    for _, row in df_calend.iterrows():
+        dia = row["dia"]  
+        hi = row["hora_inicio"]
+        hf = row["hora_fin"]
+        cap = row["cant_operarios"]
 
-    filas = []
-    origen = datetime(2025, 3, 1)
+        if isinstance(hi, str):
+            hi = datetime.strptime(hi, "%H:%M:%S").time()
+        if isinstance(hf, str):
+            hf = datetime.strptime(hf, "%H:%M:%S").time()
 
-    for (p, t), var_inicio in start.items():
-        val_i = pulp.value(var_inicio)
-        val_f = pulp.value(end[(p, t)])
-
-        # Se omiten tareas con duración 0
-        if val_i is None or val_f is None or (val_f - val_i) == 0:
+        dt_ini = datetime(dia.year, dia.month, dia.day, hi.hour, hi.minute, hi.second)
+        dt_fin = datetime(dia.year, dia.month, dia.day, hf.hour, hf.minute, hf.second)
+        dur_secs = (dt_fin - dt_ini).total_seconds()
+        dur_min = int(round(dur_secs / 60.0))
+        if dur_min <= 0:
             continue
 
-        dt_i = fn_descomprimir(val_i) if val_i is not None else None
-        dt_f = fn_descomprimir(val_f) if val_f is not None else None
-
-        # Obtener datos de la tarea
-        row = df_tareas[(df_tareas["material_padre"] == p) & (df_tareas["id_interno"] == t)].iloc[0]
-        ubicacion = row["nom_ubicacion"]
-        n_ops = int(row["num_operarios_fijos"]) if not pd.isnull(row["num_operarios_fijos"]) else 1
-
-        filas.append({
-            "pedido": p,
-            "tarea": t,
-            "inicio": val_i,
-            "fin": val_f,
-            "datetime_inicio": dt_i,
-            "datetime_fin": dt_f,
-            "ubicacion": ubicacion,
-            "operarios_asignados": n_ops
+        comp_start = acumulado
+        comp_end = acumulado + dur_min
+        intervals.append({
+            "dt_inicio": dt_ini,
+            "dt_fin": dt_fin,
+            "comp_start": comp_start,
+            "comp_end": comp_end
         })
+        capacity_per_interval.append(cap)
+        acumulado += dur_min
 
-    df_sol = pd.DataFrame(filas)
+    def fn_comprimir(dt_real):
+        if not intervals:
+            return 0
+        if dt_real < intervals[0]["dt_inicio"]:
+            return 0
+        for itv in intervals:
+            if itv["dt_inicio"] <= dt_real <= itv["dt_fin"]:
+                delta_secs = (dt_real - itv["dt_inicio"]).total_seconds()
+                delta_min = int(round(delta_secs / 60.0))
+                return itv["comp_start"] + delta_min
+            elif dt_real < itv["dt_inicio"]:
+                return itv["comp_start"]
+        return intervals[-1]["comp_end"]
 
-    # Guardar resultados en Excel
-    output_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../archivos/db_dev/output"))
-    os.makedirs(output_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = os.path.basename(ruta_excel)
-    base, ext = os.path.splitext(filename)
-    new_file = os.path.join(output_dir, f"{base}_{timestamp}{ext}")
+    def fn_descomprimir(comp_t):
+        if not intervals:
+            return datetime(2025, 3, 1)
+        if comp_t <= intervals[0]["comp_start"]:
+            return intervals[0]["dt_inicio"]
+        for itv in intervals:
+            if itv["comp_start"] <= comp_t <= itv["comp_end"]:
+                delta_m = comp_t - itv["comp_start"]
+                return itv["dt_inicio"] + timedelta(minutes=delta_m)
+        return intervals[-1]["dt_fin"]
 
-    with pd.ExcelWriter(new_file, engine="openpyxl", mode="w") as writer:
-        df_sol.to_excel(writer, sheet_name="RESULTADOS", index=False)
+    total_m = intervals[-1]["comp_end"] if intervals else 0
+    return intervals, fn_comprimir, fn_descomprimir, total_m, capacity_per_interval
 
-    print(f"Resultados guardados en: {new_file}")
-
-    # Generar la lista de ubicaciones ordenada según df_capacidades
-    ordered_locations = df_capacidades.sort_values("ubicación")["nom_ubicacion"].tolist()
-
-    # Llamar a la función del Gantt pasando ordered_locations
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    gantt_file = os.path.join(output_dir, "gantt", f"gantt_{timestamp}.pkl")
-    plot_gantt_matplotlib(df_sol, df_entregas, df_calend, ordered_locations, save_path=gantt_file)
-
-def check_situacion_inicial(df_tareas, df_capacidades, verbose=True):
-    """
-    FUNCIÓN PARA DETECTAR SI LA SITUACIÓN DE ARRANQUE ES VÁLIDA
-    Verifica la coherencia de la situación inicial de las tareas.
-    1) Detecta qué tareas "ocupan posición" (las que tienen 0% < completada_porcentaje < 100%).
-    2) Asegura que en cada ubicación no se supere la capacidad definida en CAPACIDADES.
-    3) Revisa que no se viole el orden de predecesoras: si una tarea está al 100%,
-       todas sus predecesoras deben estar también al 100%.
-    Lanza ValueError si detecta inconsistencias.
-    """
-    # Convertir las capacidades a diccionario {nom_ubicacion: capacidad}
-    dict_cap = df_capacidades.set_index("nom_ubicacion")["capacidad"].to_dict()
-    
-    # 1) Detectar tareas en curso (completadas parcialmente)
-    df_ocupando = df_tareas[(df_tareas["completada_porcentaje"] > 0) & 
-                            (df_tareas["completada_porcentaje"] < 1)]
-    
-    # Verificar que en cada ubicación no se supere la capacidad
-    if not df_ocupando.empty:
-        g = df_ocupando.groupby("nom_ubicacion").size()
-        for ubicacion, num in g.items():
-            capacidad = dict_cap.get(ubicacion, 1)
-            if num > capacidad:
-                raise ValueError(
-                    f"La ubicación '{ubicacion}' tiene {num} tareas en curso (completada entre 0% y 100%), "
-                    f"pero su capacidad es {capacidad}. Supera la capacidad permitida."
-                )
-                
-    # 2) Chequeo del orden de predecesoras:
-    completado = {}
-    for _, row in df_tareas.iterrows():
-        mat = row["material_padre"]
-        tid = row["id_interno"]
-        pct = row.get("completada_porcentaje", 0.0)
-        completado[(mat, tid)] = pct
-
-    for _, row in df_tareas.iterrows():
-        mat = row["material_padre"]
-        tid = row["id_interno"]
-        pct_tarea = completado[(mat, tid)]
-        
-        if pct_tarea >= 1.0 and not pd.isnull(row["predecesora"]):
-            lista_preds = [int(x.strip()) for x in str(row["predecesora"]).split(";")]
-            for p_id in lista_preds:
-                pct_pred = completado.get((mat, p_id), 0.0)
-                if pct_pred < 1.0:
-                    raise ValueError(
-                        f"La tarea {tid} se indica al 100% completada, pero su predecesora {p_id} "
-                        f"del material {mat} no está al 100%. Violación de orden."
-                    )
-
-    if verbose:
-        print("check_situacion_inicial: Situación inicial verificada con éxito.")
-    return True
-
-def load_and_show_gantt():
-    """
-    Carga y muestra el último diagrama de Gantt guardado con interactividad.
-    """
-    import os
-    import pickle
-    import mplcursors
-    import matplotlib.pyplot as plt
-    
-    gantt_dir = "archivos/db_dev/output/gantt"
-    # Buscar .pkl ordenados por fecha
-    gantt_files = sorted(
-        [f for f in os.listdir(gantt_dir) if f.endswith(".pkl")],
-        key=lambda x: os.path.getmtime(os.path.join(gantt_dir, x))
-    )
-    if not gantt_files:
-        print("❌ No hay diagramas de Gantt guardados.")
-        return
-
-    latest_gantt = os.path.join(gantt_dir, gantt_files[-1])  # Último .pkl
-    with open(latest_gantt, "rb") as f:
-        fig, artists, tooltips = pickle.load(f)
-
-    print(f"📌 Cargando diagrama: {latest_gantt}")
-
-    # Regenerar la interactividad de mplcursors
-    cursor = mplcursors.cursor(artists, hover=True, highlight=True, multiple=False)
-    @cursor.connect("add")
-    def on_add(sel):
-        i = artists.index(sel.artist)
-        sel.annotation.set_text(tooltips[i])
-        sel.annotation.get_bbox_patch().set(fc="white", alpha=0.8)
-
-    # fig.show() no siempre funciona en scripts; necesitamos reanexar fig a pyplot:
-    plt.figure(fig.number)
-    plt.show(block=True)
+def imprimir_solucion(sol, makespan):
+    print("=== SOLUCIÓN ===")
+    print(f"Makespan: {makespan}")
+    for (pedido, t_idx, st, en, m, d) in sol:
+        print(f" Tarea de {pedido} idx={t_idx} Maq={m} start={st} end={en} dur={d}")
+    print("=== FIN SOLUCIÓN ===")

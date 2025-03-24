@@ -1,387 +1,235 @@
-import pandas as pd
-import pulp
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from ortools.sat.python import cp_model
 from datetime import datetime, timedelta
-import time
+import collections
+import pandas as pd
+import numpy as np
+import os
 
-from src.utils import leer_datos, escribir_resultados, check_situacion_inicial
+# Importamos las funciones auxiliares que diste
+from src.utils import (
+    leer_datos,
+    check_situacion_inicial,
+    comprimir_calendario
+)
 
-# =========================================================================
-# 1) Compresión del calendario
-# =========================================================================
-def comprimir_calendario(df_calend):
-    df_calend = df_calend.copy()
-    df_calend = df_calend.sort_values(by=["dia", "hora_inicio"])
+# Pequeña clase/nametuple para imprimir la asignación final al estilo "job_x_task_y"
+from collections import namedtuple
+AssignedTask = namedtuple("AssignedTask", ["start", "material", "task_id", "duration"])
 
-    intervals = []
-    acumulado = 0.0
-    capacity_per_interval = []
-
-    for _, row in df_calend.iterrows():
-        dia = row["dia"]
-        hi = row["hora_inicio"]
-        hf = row["hora_fin"]
-        if isinstance(hi, str):
-            hi = datetime.strptime(hi, "%H:%M:%S").time()
-        if isinstance(hf, str):
-            hf = datetime.strptime(hf, "%H:%M:%S").time()
-
-        cap = row["cant_operarios"]
-        dt_ini = datetime(dia.year, dia.month, dia.day, hi.hour, hi.minute, hi.second)
-        dt_fin = datetime(dia.year, dia.month, dia.day, hf.hour, hf.minute, hf.second)
-
-        dur_h = (dt_fin - dt_ini).total_seconds() / 3600.0
-        if dur_h <= 0:
-            continue
-
-        comp_start = acumulado
-        comp_end   = acumulado + dur_h
-        intervals.append({
-            "dt_inicio": dt_ini,
-            "dt_fin": dt_fin,
-            "comp_start": comp_start,
-            "comp_end": comp_end
-        })
-        capacity_per_interval.append(cap)
-        acumulado += dur_h
-
-    def fn_comprimir(dt_real):
-        if not intervals:
-            return 0.0
-        if dt_real < intervals[0]["dt_inicio"]:
-            return 0.0
-        for itv in intervals:
-            if itv["dt_inicio"] <= dt_real <= itv["dt_fin"]:
-                delta = (dt_real - itv["dt_inicio"]).total_seconds() / 3600.0
-                return itv["comp_start"] + delta
-            elif dt_real < itv["dt_inicio"]:
-                return itv["comp_start"]
-        return intervals[-1]["comp_end"]
-
-    def fn_descomprimir(comp_t):
-        if not intervals:
-            return datetime(2025, 3, 1)
-        if comp_t <= intervals[0]["comp_start"]:
-            return intervals[0]["dt_inicio"]
-        for itv in intervals:
-            if itv["comp_start"] <= comp_t <= itv["comp_end"]:
-                delta_h = comp_t - itv["comp_start"]
-                return itv["dt_inicio"] + timedelta(hours=delta_h)
-        return intervals[-1]["dt_fin"]
-
-    total_h = intervals[-1]["comp_end"] if intervals else 0.0
-    return intervals, fn_comprimir, fn_descomprimir, total_h, capacity_per_interval
-
-# =========================================================================
-# 2) Restricciones originales
-# =========================================================================
-
-def fijar_inicio_tareas_parciales(modelo, df_tareas, df_entregas, start, fn_comprimir):
-    for _, row in df_tareas.iterrows():
-        mat = row["material_padre"]
-        t_id = row["id_interno"]
-        pct = row.get("completada_porcentaje", 0.0)
-        if 0 < pct < 1:
-            fecha_rec = df_entregas.loc[df_entregas["referencia"] == mat, "fecha_recepcion_materiales"].iloc[0]
-            rec_ts = fn_comprimir(fecha_rec)
-            modelo += start[(mat, t_id)] == rec_ts
-
-def restriccion_precedencia(modelo, df_tareas, start, end):
-    for _, row in df_tareas.iterrows():
-        mat = row["material_padre"]
-        t_id = row["id_interno"]
-        if not pd.isnull(row["predecesora"]):
-            lista_preds = [int(x.strip()) for x in str(row["predecesora"]).split(";")]
-            for p_id in lista_preds:
-                if (mat, p_id) not in end:
-                    raise ValueError(f"No existe la tarea predecesora {p_id} para {mat}-{t_id}")
-                modelo += end[(mat, p_id)] <= start[(mat, t_id)]
-
-def restriccion_no_iniciar_antes_recepcion(modelo, df_entregas, df_tareas, start, fn_comprimir):
-    for _, row in df_tareas.iterrows():
-        mat = row["material_padre"]
-        t_id = row["id_interno"]
-        fecha_rec = df_entregas.loc[df_entregas["referencia"] == mat, "fecha_recepcion_materiales"].iloc[0]
-        rec_ts = fn_comprimir(fecha_rec)
-        modelo += start[(mat, t_id)] >= rec_ts
-
-def restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso, fn_comprimir):
-    for ref in df_entregas["referencia"].unique():
-        fecha_limite = df_entregas.loc[df_entregas["referencia"] == ref, "fecha_entrega"].iloc[0]
-        entrega_ts = fn_comprimir(fecha_limite)
-
-        df_mat = df_tareas[df_tareas["material_padre"] == ref]
-        finales = []
-        all_preds = set()
-
-        for _, row in df_mat.iterrows():
-            if not pd.isnull(row["predecesora"]):
-                for pp in str(row["predecesora"]).split(";"):
-                    all_preds.add(int(pp.strip()))
-
-        for t_id in df_mat["id_interno"].unique():
-            if t_id not in all_preds:
-                finales.append(t_id)
-
-        for t_id in finales:
-            modelo += end[(ref, t_id)] <= entrega_ts + retraso[ref]
-
-# =========================================================================
-# 3) Restricciones de duración y asignación de operarios
-# =========================================================================
-
-def restriccion_duracion_variable_ops(modelo, df_tareas, start, end, dur_task, x_k, dur_op):
+def armar_modelo_subintervalos(datos):
     """
-    - dur_op[(mat,t)] = suma de (tiempo_operario_rest / k)*x_k
-    - dur_task[(mat,t)] >= dur_op[(mat,t)], >= t_robot*(1-pct), >= t_verif*(1-pct)
-    - end[(mat,t)] = start + dur_task
+    Crea el modelo CP-SAT con sub-intervalos por cada tarea en cada turno,
+    usando AddCumulative nativa para respetar la capacidad, y permitiendo retrasos suaves
+    en la fecha de entrega.
     """
-    for _, row in df_tareas.iterrows():
-        mat   = row["material_padre"]
-        t_id  = row["id_interno"]
-        t_op  = row.get("tiempo_operario", 0) or 0
-        t_robot = row.get("tiempo_robot", 0) or 0
-        t_verif = row.get("tiempo_verificado", 0) or 0
-        pct = row.get("completada_porcentaje", 0.0)
-        if pct > 1.0:
-            pct = 1.0
+    model = cp_model.CpModel()
 
-        # Si la tarea no requiere operarios (p.ej. verificado, t_op=0, etc.),
-        # forzamos dur_op=0 y no usamos x_k
-        # (ya habremos evitado crearlas o las fijamos a 0).
-        t_op_rest = t_op*(1 - pct)
-        if t_op_rest <= 1e-9:
-            # Sin trabajo de operarios
-            modelo += dur_op[(mat, t_id)] == 0
-        else:
-            # Caso normal: la tarea sí tiene parte de operarios
-            max_ops = int(row["num_operarios_max"]) if not pd.isnull(row["num_operarios_max"]) else 1
-            modelo += dur_op[(mat, t_id)] == pulp.lpSum(
-                (t_op_rest / k)* x_k[(mat, t_id, k)]
-                for k in range(1, max_ops + 1)
-            )
+    # Normalizar strings
+    datos["df_tareas"]["material_padre"]   = datos["df_tareas"]["material_padre"].astype(str).str.strip()
+    datos["df_entregas"]["referencia"]     = datos["df_entregas"]["referencia"].astype(str).str.strip()
 
-        # dur_task >= dur_op, >= t_robot*(1-pct), >= t_verif*(1-pct)
-        modelo += dur_task[(mat, t_id)] >= dur_op[(mat, t_id)]
-        modelo += dur_task[(mat, t_id)] >= (t_robot * (1 - pct))
-        modelo += dur_task[(mat, t_id)] >= (t_verif * (1 - pct))
+    df_calend   = datos["df_calend"]
+    df_tareas   = datos["df_tareas"]
+    df_entregas = datos["df_entregas"]
+    intervals   = datos["intervals"]
+    capacity    = datos["capacity_per_interval"]
+    fn_comprimir= datos["fn_comprimir"]
+    total_m     = datos["total_m"]
 
-        # end = start + dur_task
-        modelo += end[(mat, t_id)] == start[(mat, t_id)] + dur_task[(mat, t_id)]
-
-def restriccion_eleccion_num_operarios(modelo, df_tareas, x_k):
-    """
-    Si la tarea requiere operarios, sum_k x_k = 1;
-    si NO requiere operarios (tiempo_operario=0 o max=0),
-    no creamos variables o las fijamos a 0.
-    """
-    for _, row in df_tareas.iterrows():
-        mat    = row["material_padre"]
-        t_id   = row["id_interno"]
-        max_ops = row.get("num_operarios_max", 0)
-        if pd.isnull(max_ops):
-            max_ops = 0
-        max_ops = int(max_ops)
-
-        t_op   = row.get("tiempo_operario", 0) or 0
-        pct    = row.get("completada_porcentaje", 0.0)
-        if pct > 1: pct=1
-        t_op_rest = t_op*(1 - pct)
-
-        # Solo si t_op_rest>0 y max_ops>0 generamos la restricción sum_k x_k=1
-        # En caso contrario, no se crea restricción (o se fija x_k=0).
-        if (t_op_rest > 1e-9) and (max_ops > 0):
-            modelo += pulp.lpSum(
-                [x_k[(mat, t_id, k)] for k in range(1, max_ops+1)]
-            ) == 1
-        else:
-            # Forzamos x_k=0 en todas las combinaciones, si es que existen
-            # para evitar que el solver las use indebidamente
-            for k in range(1, max_ops+1):
-                var_x = x_k.get((mat, t_id, k), None)
-                if var_x is not None:
-                    modelo += var_x == 0
-
-# =========================================================================
-# 4) Capacidad de operarios por turno (pairwise, bigM)
-# =========================================================================
-
-def get_assigned_ops_expr(mat, t_id, max_k, x_k):
-    return pulp.lpSum(k * x_k[(mat, t_id, k)] for k in range(1, max_k+1)
-                      if (mat, t_id, k) in x_k)
-
-def restriccion_capacidad_operarios_por_turno(modelo, df_tareas, start, end,
-                                              intervals, capacity_per_interval,
-                                              x_k):
-    """
-    Si dos tareas se solapan en un bloque i, la suma de operarios asignados
-    no puede exceder capacity_per_interval[i]. Si la suma > cap_i,
-    se aplica una restricción de orden para que no se solapen.
-    """
-
-    df_tareas_idx = df_tareas.reset_index(drop=True)
-    M = 1e6
-    order_block = {}
-
-    for i in range(len(intervals)):
-        block_start = intervals[i]["comp_start"]
-        block_end   = intervals[i]["comp_end"]
-        cap_i       = capacity_per_interval[i]
-
-        for idx_a in range(len(df_tareas_idx)):
-            rowA = df_tareas_idx.loc[idx_a]
-            matA = rowA["material_padre"]
-            tA   = rowA["id_interno"]
-            maxA = int(rowA.get("num_operarios_max", 0))
-
-            for idx_b in range(idx_a+1, len(df_tareas_idx)):
-                rowB = df_tareas_idx.loc[idx_b]
-                matB = rowB["material_padre"]
-                tB   = rowB["id_interno"]
-                maxB = int(rowB.get("num_operarios_max", 0))
-
-                # Calculamos la expresión de operarios sumados
-                ops_sum_expr = get_assigned_ops_expr(matA, tA, maxA, x_k) \
-                              + get_assigned_ops_expr(matB, tB, maxB, x_k)
-
-                # Si la suma MÁXIMA (maxA + maxB) <= cap_i, no hay problema: pueden solaparse sin pasarse de cap.
-                if (maxA + maxB) > cap_i:
-                    # Creamos la var binaria de orden
-                    var = pulp.LpVariable(f"orderBlock_{i}_{matA}_{tA}_{matB}_{tB}", cat=pulp.LpBinary)
-                    order_block[(i, matA, tA, matB, tB)] = var
-
-                    # si ops_sum_expr > cap_i => var=1 => forzamos que no se solapen
-                    modelo += ops_sum_expr <= cap_i + M*var
-
-                    # "No solape" => startB >= endA - M*(1-var), etc.
-                    modelo += start[(matB, tB)] >= end[(matA, tA)] - M*(1 - var)
-                    modelo += start[(matA, tA)] >= end[(matB, tB)] - M*var
-
-# =========================================================================
-# 5) Montamos y resolvemos el modelo
-# =========================================================================
-
-def armar_modelo(datos):
-    df_entregas  = datos["df_entregas"]
-    df_tareas    = datos["df_tareas"]
-    intervals    = datos["intervals"]
-    capacity     = datos["capacity_per_interval"]
-    fn_comprimir = datos["fn_comprimir"]
-
-    modelo = pulp.LpProblem("Planificacion_VariableOps", pulp.LpMinimize)
-
+    # 1) Creamos variable de retraso p/ cada pedido => end_task <= deadline + retraso
     pedidos = df_entregas["referencia"].unique().tolist()
-
-    start    = {}
-    end      = {}
-    retraso  = {}
-    dur_task = {}
-    dur_op   = {}
-    x_k      = {}
-
-    # 1) Crear variables start, end, retraso, dur_task, dur_op para cada tarea
+    retraso = {}
     for p in pedidos:
-        df_mat = df_tareas[df_tareas["material_padre"] == p]
-        for t_id in df_mat["id_interno"].unique():
-            start[(p, t_id)]    = pulp.LpVariable(f"start_{p}_{t_id}", lowBound=0)
-            end[(p, t_id)]      = pulp.LpVariable(f"end_{p}_{t_id}",   lowBound=0)
-            dur_task[(p, t_id)] = pulp.LpVariable(f"durTask_{p}_{t_id}", lowBound=0)
-            dur_op[(p, t_id)]   = pulp.LpVariable(f"durOp_{p}_{t_id}",   lowBound=0)
+        retraso[p] = model.NewIntVar(0, 2*total_m, f"retraso_{p}")
 
-        retraso[p] = pulp.LpVariable(f"retraso_{p}", lowBound=0)
+    # 2) Calculamos durTask (en minutos) p/ cada tarea
+    durTask = {}
+    all_tasks = []
+    for _, row in df_tareas.iterrows():
+        mat  = row["material_padre"]
+        t_id = row["id_interno"]
+        all_tasks.append((mat, t_id))
 
-    # 2) Crear x_k sólo para tareas que realmente tengan num_operarios_max>0
-    for idx, row in df_tareas.iterrows():
-        mat = row["material_padre"]
-        t_id= row["id_interno"]
-        max_ops = row.get("num_operarios_max", 0)
-        if pd.isnull(max_ops):
-            max_ops = 0
-        max_ops = int(max_ops)
-        if max_ops < 1:
-            continue  # No creamos variables x_k
-        # Creamos x_k(1..max_ops) para esa tarea
-        for k in range(1, max_ops+1):
-            nombre = f"x_k_{mat}_{t_id}_{k}"
-            x_k[(mat, t_id, k)] = pulp.LpVariable(nombre, cat=pulp.LpBinary)
+    for (mat, t_id) in all_tasks:
+        row = df_tareas[(df_tareas["material_padre"]==mat)&(df_tareas["id_interno"]==t_id)].iloc[0]
+        pct = row.get("completada_porcentaje",0.0) or 0.0
+        if pct>1: pct=1
+        t_op    = (row.get("tiempo_operario",0)   or 0)*60*(1-pct)
+        t_robot = (row.get("tiempo_robot",0)      or 0)*60*(1-pct)
+        t_verif = (row.get("tiempo_verificado",0) or 0)*60*(1-pct)
+        dur = max(t_op, t_robot, t_verif)
+        durTask[(mat,t_id)] = int(round(dur))
 
-    print('leyendo restricciones...')
-    # 3) Restricciones
-    #    A) Elección de num_operarios
-    restriccion_eleccion_num_operarios(modelo, df_tareas, x_k)
-    #    B) Duración variable
-    restriccion_duracion_variable_ops(modelo, df_tareas, start, end, dur_task, x_k, dur_op)
-    #    C) Tareas en curso
-    fijar_inicio_tareas_parciales(modelo, df_tareas, df_entregas, start, fn_comprimir)
-    #    D) Precedencia
-    restriccion_precedencia(modelo, df_tareas, start, end)
-    #    E) No iniciar antes de recepción
-    restriccion_no_iniciar_antes_recepcion(modelo, df_entregas, df_tareas, start, fn_comprimir)
-    #    F) Capacidad de operarios por turno
-    restriccion_capacidad_operarios_por_turno(modelo, df_tareas, start, end, intervals, capacity, x_k)
-    #    G) Fechas de entrega
-    restriccion_entrega_a_tiempo(modelo, df_entregas, df_tareas, end, retraso, fn_comprimir)
+    # 3) Crear sub-intervalos (mat, t_id) X turn i
+    pres_sub   = {}
+    start_sub  = {}
+    dur_sub_   = {}
+    end_sub    = {}
+    intervals_sub = {}
 
-    print('función objetivo...')
+    n_turnos = len(intervals)
+    for (mat, t_id) in all_tasks:
+        for i, itv in enumerate(intervals):
+            s_i = itv["comp_start"]
+            e_i = itv["comp_end"]
+            pvar = model.NewBoolVar(f"pres_{mat}_{t_id}_turn{i}")
+            svar = model.NewIntVar(s_i, e_i, f"start_{mat}_{t_id}_turn{i}")
+            dvar = model.NewIntVar(0, e_i - s_i, f"dur_{mat}_{t_id}_turn{i}")
+            evar = model.NewIntVar(s_i, e_i, f"end_{mat}_{t_id}_turn{i}")
 
-    # 4) Función objetivo: minimizar la suma de retrasos
-    modelo += pulp.lpSum([retraso[p] for p in pedidos]), "Minimize_Total_Tardiness"
+            intervalVar = model.NewOptionalIntervalVar(svar, dvar, evar, pvar,
+                                                       f"interval_{mat}_{t_id}_turn{i}")
 
-    return modelo, start, end, retraso, dur_task
+            pres_sub[(mat,t_id,i)]  = pvar
+            start_sub[(mat,t_id,i)] = svar
+            dur_sub_[(mat,t_id,i)]  = dvar
+            end_sub[(mat,t_id,i)]   = evar
+            intervals_sub[(mat,t_id,i)] = intervalVar
 
+            # Si no se usa => dur=0
+            model.Add(dvar==0).OnlyEnforceIf(pvar.Not())
 
-def resolver_modelo(modelo):
-    solver = pulp.HiGHS_CMD(
-        msg=True,
-        timeLimit=300,  # por si el modelo es grande
-        mip=True
-    )
-    print("Resolviendo el modelo con HiGHS...")
-    modelo.solve(solver)
-    print("Estado:", pulp.LpStatus[modelo.status])
-    if modelo.status == pulp.LpStatusOptimal:
-        print("Valor objetivo:", pulp.value(modelo.objective))
-    else:
-        print("⚠ No se encontró solución óptima.")
-    return modelo
+    # 4) sum(dur_sub) >= durTask
+    for (mat, t_id) in all_tasks:
+        needed = durTask[(mat,t_id)]
+        model.Add(
+            sum(dur_sub_[(mat,t_id,i)] for i in range(n_turnos)) >= needed
+        )
 
-# =========================================================================
-# 6) Flujo principal
-# =========================================================================
+    # 5) AddCumulative nativa p/ cada turno
+    for i, itv in enumerate(intervals):
+        cap_i = capacity[i]
+        interval_list = []
+        demand_list   = []
+        for (mat, t_id) in all_tasks:
+            row_ = df_tareas[(df_tareas["material_padre"]==mat)&(df_tareas["id_interno"]==t_id)].iloc[0]
+            max_ops = int(row_.get("num_operarios_max",1) or 1)
+            interval_list.append(intervals_sub[(mat,t_id,i)])
+            demand_list.append(max_ops)
+        model.AddCumulative(interval_list, demand_list, cap_i)
+
+    # 6) end_task => max end_sub
+    end_task = {}
+    for (mat,t_id) in all_tasks:
+        eT = model.NewIntVar(0, total_m+2000, f"endTask_{mat}_{t_id}")
+        for i in range(n_turnos):
+            model.Add(eT >= end_sub[(mat,t_id,i)])
+        end_task[(mat,t_id)] = eT
+
+    # 7) Fechas de entrega => end_task <= deadline + retraso
+    for ref in pedidos:
+        dl = df_entregas.loc[df_entregas["referencia"]==ref,"fecha_entrega"].iloc[0]
+        dl_m = fn_comprimir(dl)
+        df_mat = df_tareas[df_tareas["material_padre"]==ref]
+        for _, row_ in df_mat.iterrows():
+            t_id = row_["id_interno"]
+            mat_ = row_["material_padre"]
+            model.Add(end_task[(mat_, t_id)] <= dl_m + retraso[ref])
+
+    # 8) Precedencias => end_task(A) <= start_sub(B,i)
+    for _, row_ in df_tareas.iterrows():
+        mat_ = row_["material_padre"]
+        t_id= row_["id_interno"]
+        preds = row_["predecesora"]
+        if not pd.isnull(preds):
+            preds_ids = [int(x.strip()) for x in str(preds).split(";")]
+            for p_id in preds_ids:
+                for i in range(n_turnos):
+                    model.Add(end_task[(mat_, p_id)] <= start_sub[(mat_, t_id, i)]).OnlyEnforceIf(pres_sub[(mat_, t_id, i)])
+
+    # 9) Tareas parciales => si 0<pct<1 => no iniciar antes de recep
+    for _, row_ in df_tareas.iterrows():
+        mat_ = row_["material_padre"]
+        t_id= row_["id_interno"]
+        pct = row_.get("completada_porcentaje",0.0)
+        if 0<pct<1:
+            fecha_rec = df_entregas.loc[df_entregas["referencia"]==mat_,"fecha_recepcion_materiales"].iloc[0]
+            rec_m = fn_comprimir(fecha_rec)
+            for i in range(n_turnos):
+                model.Add(start_sub[(mat_,t_id,i)] >= rec_m).OnlyEnforceIf(pres_sub[(mat_,t_id,i)])
+
+    # 10) Minimizar la suma de retrasos
+    model.Minimize(sum(retraso[p] for p in pedidos))
+
+    return model, intervals_sub, pres_sub, start_sub, dur_sub_, end_sub, end_task, retraso
+
 
 def main():
     print("1) Leyendo datos...")
-    ruta = "archivos/db_dev/Datos_entrada_v10.xlsx"
-    datos = leer_datos(ruta)
+    ruta_excel = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas.xlsx"
+    datos = leer_datos(ruta_excel)
 
-    print("2) Revisando consistencia inicial...")
-    check_situacion_inicial(datos["df_tareas"], datos["df_capacidades"])
+    print("2) Chequeando situación inicial...")
+    check_situacion_inicial(datos["df_tareas"], datos["df_capacidades"], verbose=True)
 
     print("3) Comprimiendo calendario...")
-    intervals, fn_comp, fn_decomp, total_h, capacity = comprimir_calendario(datos["df_calend"])
-    datos["intervals"]               = intervals
-    datos["capacity_per_interval"]   = capacity
-    datos["fn_comprimir"]            = fn_comp
-    datos["fn_descomprimir"]         = fn_decomp
-    datos["total_horas_comprimidas"] = total_h
+    intervals, fn_comp, fn_decomp, total_m, capacity = comprimir_calendario(datos["df_calend"])
+    datos["intervals"] = intervals
+    datos["capacity_per_interval"] = capacity
+    datos["fn_comprimir"]   = fn_comp
+    datos["fn_descomprimir"] = fn_decomp
+    datos["total_m"] = total_m
 
-    print("4) Creando modelo...")
-    modelo, start, end, retraso, dur_task = armar_modelo(datos)
+    print("4) Creando modelo con sub-intervalos + AddCumulative + retraso suave...")
+    model, intervals_sub, pres_sub, start_sub, dur_sub_, end_sub, end_task, retraso = armar_modelo_subintervalos(datos)
 
-    print("5) Guardando modelo LP para depurar...")
-    modelo.writeLP("debug_model_variable_ops.lp")
+    print("5) Resolviendo con CP-SAT...")
+    solver = cp_model.CpSolver()
+    status = solver.Solve(model)
 
-    print("6) Resolviendo...")
-    resolver_modelo(modelo)
+    print("   => Estado:", solver.StatusName(status))
 
-    print("7) Guardando resultados...")
-    escribir_resultados(
-        modelo, start, end, ruta,
-        datos["df_tareas"], datos["df_entregas"], datos["df_calend"],
-        datos["fn_descomprimir"],
-        datos["df_capacidades"]
-    )
-    print("¡Terminado!")
+    # Si hay solución, la imprimimos al "estilo snippet"
+    if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        print("Solution found:")
 
+        # Construimos una estructura "assigned_tasks" indexada por "turno"
+        assigned_tasks_by_turn = collections.defaultdict(list)
+
+        # Recorremos sub-intervalos activos
+        for (mat, t_id, i), intervalObj in intervals_sub.items():
+            if solver.Value(pres_sub[(mat,t_id,i)]) == 1:
+                start = solver.Value(start_sub[(mat,t_id,i)])
+                dur = solver.Value(dur_sub_[(mat,t_id,i)])
+                if dur>0:
+                    # Creamos un AssignedTask con la info
+                    assigned = AssignedTask(start=start, material=mat, task_id=t_id, duration=dur)
+                    assigned_tasks_by_turn[i].append(assigned)
+
+        # Ordenar y volcar la info
+        # ("turno" hace el papel de "Machine" en el snippet)
+        output = ""
+        for turn_i in sorted(assigned_tasks_by_turn.keys()):
+            tasks_list = assigned_tasks_by_turn[turn_i]
+            # Orden por start
+            tasks_list.sort(key=lambda x: x.start)
+
+            sol_line_tasks = f"Turn {turn_i}: "
+            sol_line = "          "
+
+            for atask in tasks_list:
+                name = f"{atask.material}_task_{atask.task_id}"
+                sol_line_tasks += f"{name:25}"
+
+                start_ = atask.start
+                end_   = start_ + atask.duration
+                interval_str = f"[{start_},{end_}]"
+                sol_line += f"{interval_str:25}"
+
+            sol_line += "\n"
+            sol_line_tasks += "\n"
+            output += sol_line_tasks + sol_line
+
+        print("Suma de retrasos =", solver.ObjectiveValue())
+        print(output)
+
+    else:
+        print("No solution found.")
+
+    print("Fin.")
 
 if __name__ == "__main__":
     main()
