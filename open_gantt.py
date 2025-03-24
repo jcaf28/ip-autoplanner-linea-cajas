@@ -1,3 +1,5 @@
+# PATH: open_gantt.py
+
 def load_and_show_gantt():
     """
     Carga y muestra la última figura de Gantt guardada, regenerando la interactividad de mplcursors.

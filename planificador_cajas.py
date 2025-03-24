@@ -1,3 +1,5 @@
+# PATH: planificador_cajas.py
+
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
