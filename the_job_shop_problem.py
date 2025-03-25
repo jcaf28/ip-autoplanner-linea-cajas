@@ -4,14 +4,18 @@ import math
 import collections
 from ortools.sat.python import cp_model
 
-from src.utils import leer_datos, comprimir_calendario, construir_estructura_tareas, extraer_solucion
+from src.utils import leer_datos, comprimir_calendario, construir_estructura_tareas, extraer_solucion, comprimir_tiempo
 from src.results_gen.entry import mostrar_resultados
 
 def crear_modelo_cp(job_dict,
                     precedences,
                     machine_capacity,
                     intervals,
-                    capacity_per_interval):
+                    capacity_per_interval,
+                    df_entregas,   
+                    df_calend):    
+    
+
     model = cp_model.CpModel()
     all_vars = {}
     horizon = 0
@@ -23,27 +27,29 @@ def crear_modelo_cp(job_dict,
 
     machine_to_intervals = collections.defaultdict(list)
 
+    # Preparamos acceso rápido a fechas de entrega y recepción
+    ent_dict = {}
+    for _, row in df_entregas.iterrows():
+        ref = str(row["referencia"])
+        ent_dict[ref] = {
+            "fecha_recepcion": row["fecha_recepcion_materiales"],
+            "fecha_entrega":   row["fecha_entrega"]
+        }
+
     for pedido, tasks in job_dict.items():
         for t_idx, (tid, machine_id, tiempo_base, min_op, max_op, tipo) in enumerate(tasks):
             if min_op == max_op == 0:
-                # Tarea de verificado: no consume operarios
                 x_op = model.NewIntVar(0, 0, f"xop_{pedido}_{tid}")
                 duration_var = model.NewConstant(tiempo_base)
             else:
                 x_op = model.NewIntVar(min_op, max_op, f"xop_{pedido}_{tid}")
-                # Calculamos las duraciones posibles en función de x_op
-                # NOTA: si x_op parte de 1, usamos ese valor; si se requiere un ajuste por min_op, habría que desplazar el índice
                 dur_x = []
                 for x in range(min_op, max_op + 1):
-                    if tiempo_base > 0:
-                        val = math.ceil(tiempo_base / x)
-                    else:
-                        val = tiempo_base
+                    val = math.ceil(tiempo_base / x) if tiempo_base > 0 else 0
                     dur_x.append(val)
-                dur_min = min(dur_x) if dur_x else 0
-                dur_max = max(dur_x) if dur_x else 0
+                dur_min = min(dur_x)
+                dur_max = max(dur_x)
                 duration_var = model.NewIntVar(dur_min, dur_max, f"dur_{pedido}_{tid}")
-                # Ajustamos el índice en AddElement: si x_op parte de min_op, se usa (x_op - min_op)
                 model.AddElement(x_op - min_op, dur_x, duration_var)
 
             start_var = model.NewIntVar(0, horizon, f"start_{pedido}_{tid}")
@@ -58,23 +64,21 @@ def crear_modelo_cp(job_dict,
                 "duration": duration_var,
                 "machine": machine_id
             }
-            machine_to_intervals[machine_id].append((interval_var, 1))  # 1 es la "demanda" de la máquina
+            machine_to_intervals[machine_id].append((interval_var, 1))
 
     # Precedencias
     for pedido, prec_list in precedences.items():
         for (idxA, idxB) in prec_list:
             model.Add(all_vars[(pedido, idxB)]["start"] >= all_vars[(pedido, idxA)]["end"])
 
-    # Restricción: capacidad en cada máquina
+    # Capacidad de máquinas
     for mach, interval_list in machine_to_intervals.items():
         ivars = [iv for (iv, d) in interval_list]
         demands = [d for (iv, d) in interval_list]
         cap = machine_capacity.get(mach, 1)
         model.AddCumulative(ivars, demands, cap)
 
-    # ==========================================
-    # NUEVO: Restricción por turnos - Operarios
-    # ==========================================
+    # Capacidad por turnos (operarios)
     for i, seg in enumerate(intervals):
         cini = seg["comp_start"]
         cfin = seg["comp_end"]
@@ -89,7 +93,6 @@ def crear_modelo_cp(job_dict,
             st = varset["start"]
             en = varset["end"]
 
-            # Creamos una booleana: la tarea está dentro del intervalo de turno
             ov = model.NewBoolVar(f"op_overlap_{i}_{pedido}_{t_idx}")
             model.Add(st < cfin).OnlyEnforceIf(ov)
             model.Add(en > cini).OnlyEnforceIf(ov)
@@ -99,7 +102,6 @@ def crear_modelo_cp(job_dict,
             model.Add(en <= cini).OnlyEnforceIf(b2)
             model.AddBoolOr([b1, b2]).OnlyEnforceIf(ov.Not())
 
-            # Solo añadimos tareas que pueden solaparse
             interval_active = model.NewOptionalIntervalVar(
                 varset["start"],
                 varset["duration"],
@@ -113,16 +115,42 @@ def crear_modelo_cp(job_dict,
 
         model.AddCumulative(interval_list, demands, cap_i)
 
-    # Makespan: max de todos los end
-    ends = []
-    for (pedido, tasks) in job_dict.items():
+    # RESTRICCIÓN: No iniciar tareas sin predecesoras antes de recibir materiales
+    for pedido, tasks in job_dict.items():
+        fecha_recep = ent_dict[pedido]["fecha_recepcion"]
+        recep_min = comprimir_tiempo(fecha_recep, df_calend)
+
+        precs_pedido = precedences.get(pedido, [])
+        indices_con_predecesor = set(idxB for (idxA, idxB) in precs_pedido)
         for t_idx in range(len(tasks)):
-            ends.append(all_vars[(pedido, t_idx)]["end"])
-    obj_var = model.NewIntVar(0, horizon, "makespan")
-    model.AddMaxEquality(obj_var, ends)
-    model.Minimize(obj_var)
+            if t_idx not in indices_con_predecesor:
+                st_var = all_vars[(pedido, t_idx)]["start"]
+                model.Add(st_var >= recep_min)
+
+    # PENALIZACIÓN POR RETRASO DE ENTREGA
+    tardiness_vars = []
+    for pedido, tasks in job_dict.items():
+        pedido_end_var = model.NewIntVar(0, horizon, f"end_pedido_{pedido}")
+        ends_pedido = [all_vars[(pedido, i)]["end"] for i in range(len(tasks))]
+        model.AddMaxEquality(pedido_end_var, ends_pedido)
+
+        due_date = ent_dict[pedido]["fecha_entrega"]
+        due_min = comprimir_tiempo(due_date, df_calend)
+
+        tardiness = model.NewIntVar(0, 10_000_000, f"tardiness_{pedido}")
+        model.Add(tardiness >= pedido_end_var - due_min)
+        tardiness_vars.append(tardiness)
+
+    sum_tardiness = model.NewIntVar(0, 10_000_000, "sum_tardiness")
+    model.Add(sum_tardiness == cp_model.LinearExpr.Sum(tardiness_vars))
+
+    # OBJETIVO: minimiza makespan + retrasos
+    obj = model.NewIntVar(0, 10_000_000, "obj")
+    model.Add(obj == sum_tardiness)
+    model.Minimize(obj)
 
     return model, all_vars
+
 
 def resolver_modelo(model):
     solver = cp_model.CpSolver()
@@ -131,27 +159,30 @@ def resolver_modelo(model):
 
 def planificar(ruta_excel):
     datos = leer_datos(ruta_excel)
-    df_tareas = datos["df_tareas"]
-    df_capac = datos["df_capac"]
-    df_calend = datos["df_calend"]
+    df_tareas   = datos["df_tareas"]
+    df_capac    = datos["df_capac"]
+    df_calend   = datos["df_calend"]
+    df_entregas = datos["df_entregas"]
 
     intervals, cap_int = comprimir_calendario(df_calend)
     job_dict, precedences, machine_cap = construir_estructura_tareas(df_tareas, df_capac)
 
+    # Llamada modificada: pasamos df_entregas y df_calend
     model, all_vars = crear_modelo_cp(job_dict,
                                       precedences,
                                       machine_cap,
                                       intervals,
-                                      cap_int)
+                                      cap_int,
+                                      df_entregas,   # <-- nuevo
+                                      df_calend)     # <-- nuevo
 
     solver, status = resolver_modelo(model)
     sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int, df_calend)
 
     return sol_tareas, timeline, df_capac
 
-
 if __name__ == "__main__":
-    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
+    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v11_fechas_no_chill_toy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
     sol_tareas, timeline, df_capac = planificar(ruta_archivo_base)
@@ -163,6 +194,6 @@ if __name__ == "__main__":
                         imprimir=False,
                         exportar=False,
                         output_dir=output_dir,
-                        generar_gantt=True,
+                        generar_gantt=False,
                         guardar_raw=True,  
                       )

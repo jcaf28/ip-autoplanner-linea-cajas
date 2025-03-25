@@ -125,8 +125,6 @@ def construir_estructura_tareas(df_tareas, df_capac):
 
     return job_dict, precedences, machine_capacity
 
-from datetime import datetime, timedelta
-
 def descomprimir_tiempo(t, df_calend, modo="ini"):
     """
     Convierte un minuto acumulado `t` a un timestamp.
@@ -165,6 +163,54 @@ def descomprimir_tiempo(t, df_calend, modo="ini"):
         acumulado = comp_end
 
     return None  # fuera de calendario
+
+def comprimir_tiempo(dt, df_calend):
+    """
+    Convierte una fecha/hora dt (datetime) al número de minutos acumulados
+    según la estructura de turnos de df_calend.
+    Si dt cae antes del primer turno, devuelve 0.
+    Si dt cae después del último turno, devuelve el total de minutos acumulados de toda la calendarización.
+    Si cae en medio, suma los turnos enteros previos y añade la parte proporcional del turno en el que cae.
+    """
+    dfc = df_calend.copy()
+    # Aseguramos que las columnas 'dia', 'hora_inicio' y 'hora_fin' estén como datetime/time
+    dfc["dia"] = pd.to_datetime(dfc["dia"]).dt.date
+
+    # Convertimos hora_inicio y hora_fin a tipo datetime.time si no lo están
+    dfc["hora_inicio"] = pd.to_datetime(dfc["hora_inicio"], format="%H:%M:%S").dt.time
+    dfc["hora_fin"]    = pd.to_datetime(dfc["hora_fin"],    format="%H:%M:%S").dt.time
+
+    # Calculamos la duración en minutos de cada turno
+    dfc = dfc.sort_values(by=["dia", "hora_inicio"]).reset_index(drop=True)
+    dfc["dur_min"] = [
+        (datetime.combine(row["dia"], row["hora_fin"]) - datetime.combine(row["dia"], row["hora_inicio"])).total_seconds()/60
+        for _, row in dfc.iterrows()
+    ]
+    dfc["dur_min"] = dfc["dur_min"].astype(int)
+
+    acumulado = 0
+    ultimo_acumulado = 0
+    for _, row in dfc.iterrows():
+        dt_inicio_turno = datetime.combine(row["dia"], row["hora_inicio"])
+        dt_fin_turno    = datetime.combine(row["dia"], row["hora_fin"])
+        dur_minutos     = row["dur_min"]
+
+        # Si dt está antes de este turno, devolvemos el acumulado sin contar este turno.
+        if dt < dt_inicio_turno:
+            return acumulado
+
+        # Si dt está dentro de este turno, añadimos la parte parcial
+        if dt_inicio_turno <= dt < dt_fin_turno:
+            delta = (dt - dt_inicio_turno).total_seconds()/60
+            return int(acumulado + round(delta))
+
+        # Si dt está más allá de este turno, sumamos todo el turno y seguimos
+        acumulado += dur_minutos
+        ultimo_acumulado = acumulado
+
+    # Si dt es posterior al último turno disponible, devolvemos el acumulado total
+    return ultimo_acumulado
+
 
 def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
     """

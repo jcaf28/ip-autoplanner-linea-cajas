@@ -3,7 +3,7 @@
 from src.results_gen.exportar_resultados_excel import exportar_resultados_excel
 from src.results_gen.generar_diagrama_gantt import generar_diagrama_gantt
 from src.results_gen.imprimir_resultados_consola import imprimir_resultados_consola
-from src.results_gen.guardar_resultados_raw import guardar_resultados_raw  # <-- Import nuevo
+from src.results_gen.guardar_resultados_raw import guardar_resultados_raw 
 
 
 def mostrar_resultados( ruta_archivo_base,
@@ -14,7 +14,7 @@ def mostrar_resultados( ruta_archivo_base,
                         exportar=False,
                         output_dir=None,
                         generar_gantt=False,
-                        guardar_raw=False):  # <-- Nuevo parámetro
+                        guardar_raw=False):
     if imprimir:
         imprimir_resultados_consola(tareas, timeline)
 
