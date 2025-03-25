@@ -2,105 +2,195 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-def generar_diagrama_gantt(tareas, timeline, turnos_ocupacion, capacidades):
-    if not tareas:
-        print("⚠️ No hay tareas para graficar.")
-        return
+def generar_diagrama_gantt(tareas, timeline, df_capac):
+    """
+    Genera 2 subplots con Plotly:
+      1) Gantt de tareas (arriba).
+      2) Diagrama de ocupación (abajo).
+    """
 
-    print(f"✅ Graficando {len(tareas)} tareas y {len(timeline)} puntos de ocupación...")
+    # ==========================================================
+    # 1) PREPARAR DATOS: MAPA (machine -> capacidad, nombre)
+    # ==========================================================
+    # df_capac: [ubicación, nom_ubicacion, capacidad]
+    # Convertimos a dict: maquina_id -> (nom_ubicacion, capacidad)
+    map_maq = {}
+    for _, row in df_capac.iterrows():
+        mid = row["ubicación"]
+        map_maq[mid] = (row["nom_ubicacion"], int(row["capacidad"]))
 
-    df_t = pd.DataFrame(tareas)
-    df_cap = pd.DataFrame(capacidades)
-    cap_dict = df_cap.set_index("ubicación")["capacidad"].to_dict()
+    # ==========================================================
+    # 2) ASIGNAR CADA TAREA A UNA "FILA" DE SU MÁQUINA
+    #    Si capacidad > 1, generamos lineas: "Maq.1", "Maq.2", ...
+    # ==========================================================
+    # Construimos dict: machine -> lista de tareas en orden
+    from collections import defaultdict
+    tareas_por_maquina = defaultdict(list)
+    for t in tareas:
+        tareas_por_maquina[t["machine"]].append(t)
 
-    # Preparamos el diccionario de slots disponibles por máquina
-    slot_disponible = {m: [[] for _ in range(cap_dict.get(m, 1))] for m in cap_dict}
+    # Ordenamos cada lista por start
+    for m in tareas_por_maquina:
+        tareas_por_maquina[m].sort(key=lambda x: x["start"])
 
-    # Función para asignar a la primera ranura libre (sin solapamientos)
-    def asignar_slot(machine, start, end):
-        for i, tareas_slot in enumerate(slot_disponible[machine]):
-            if all(end <= t["start"] or start >= t["end"] for t in tareas_slot):
-                return i
-        return 0  # Fallback (nunca debería pasar si el modelo CP lo ha respetado)
+    # Función para asignar slots
+    # Devuelve un array con la info "slot_id" (0..capacidad-1) para cada tarea
+    def asignar_slots(lista_tareas, capacidad):
+        # slots[i] = end_time de la última tarea en el slot i
+        slots = [ -1 for _ in range(capacidad) ]
+        out = {}
+        for t in lista_tareas:
+            start = t["start"]
+            # Buscar el primer slot libre
+            for i_slot in range(capacidad):
+                if start >= slots[i_slot]:
+                    out[t["t_idx"]] = i_slot
+                    slots[i_slot] = t["end"]
+                    break
+        return out
 
-    slot_ids = []
-    for i, row in df_t.iterrows():
-        m = row["machine"]
-        s = row["start"]
-        e = row["end"]
-        slot = asignar_slot(m, s, e)
-        slot_ids.append(f"{m}.{slot+1}")
-        slot_disponible[m][slot].append({"start": s, "end": e})  # Registrar tarea en slot
+    # Asignamos
+    asignaciones = {}
+    for m, lista in tareas_por_maquina.items():
+        nombre, cap = map_maq.get(m, (f"Maq{m}",1))
+        slot_map = asignar_slots(lista, cap)
+        for t in lista:
+            key = (m, t["t_idx"])
+            asignaciones[key] = slot_map[t["t_idx"]]
 
-    df_t["slot_id"] = slot_ids
-    df_t["label"] = df_t.apply(lambda r: f"{r['pedido']} - {r['x_op']} op", axis=1)
+    # Preparamos "y_label" y "color" para cada tarea
+    # y_label = "NombreDeMaq.slot"
+    # color por "pedido"
+    color_map = {}
+    color_idx = 0
 
-    # Colores únicos por pedido
-    colors = {}
-    for pedido in df_t["pedido"].unique():
-        colors[pedido] = f"hsl({hash(pedido)%360}, 50%, 60%)"
+    for t in tareas:
+        m = t["machine"]
+        name_maq, cap = map_maq.get(m, (f"Maq{m}",1))
+        slot_id = asignaciones[(m, t["t_idx"])]
+        t["y_label"] = f"{name_maq}.{slot_id+1}" if cap>1 else f"{name_maq}"
+        pedido = t["pedido"]
+        if pedido not in color_map:
+            color_map[pedido] = f"hsl({(color_idx*47)%360}, 70%, 50%)"
+            color_idx += 1
+        t["color"] = color_map[pedido]
 
-    fig = make_subplots(
-        rows=2, cols=1,
-        shared_xaxes=True,
-        row_heights=[0.75, 0.25],
-        vertical_spacing=0.05,
-        subplot_titles=("Gantt de tareas por máquina (por capacidad)", "Tasa de ocupación de operarios")
-    )
+    # ==========================================================
+    # 3) CREAMOS FIGURA con SUBPLOTS (row_heights ajustable)
+    # ==========================================================
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        row_heights=[0.6, 0.4],
+                        vertical_spacing=0.03)
 
-    for _, row in df_t.iterrows():
-        fig.add_trace(
-            go.Bar(
-                x=[row["end"] - row["start"]],
-                y=[row["slot_id"]],
-                base=row["start"],
-                name=row["pedido"],
-                orientation='h',
-                text=row["label"],
-                hovertext=(
-                    f"Pedido: {row['pedido']}<br>"
-                    f"Inicia: {row['start']}<br>"
-                    f"Finaliza: {row['end']}<br>"
-                    f"x_op: {row['x_op']}<br>"
-                    f"Máquina: {row['machine']}<br>"
-                    f"Slot: {row['slot_id']}"
-                ),
-                marker_color=colors[row["pedido"]],
-                showlegend=False
-            ),
+    # ==========================================================
+    # 4) SUBPLOT 1: GANTT en "shapes" (barra = [start,end] x [y0,y1])
+    # ==========================================================
+    # Creamos un mapeo "y_label" -> indice
+    # Pondremos la 1ª fila en y=0..1, la 2ª en y=1..2, etc.
+    y_labels = list(set(t["y_label"] for t in tareas))
+    y_labels.sort()
+    y_map = { lbl:i for i,lbl in enumerate(y_labels) }
+
+    # Añadimos shapes
+    for t in tareas:
+        y0 = y_map[t["y_label"]]
+        y1 = y0+0.9
+        fig.add_shape(
+            type="rect",
+            x0=t["start"], x1=t["end"],
+            y0=y0, y1=y1,
+            fillcolor=t["color"], opacity=0.8,
+            line=dict(width=1, color="black"),
             row=1, col=1
         )
+        # Añadimos un scatter invisible para tooltip
+        fig.add_trace(go.Scatter(
+            x=[(t["start"]+t["end"])/2],
+            y=[(y0+y1)/2],
+            text=(f"Pedido: {t['pedido']}<br>"
+                  f"Máquina: {t['machine']}<br>"
+                  f"Fila: {t['y_label']}<br>"
+                  f"start: {t['start']}, end: {t['end']}<br>"
+                  f"x_op: {t['x_op']}, dur: {t['duration']}"),
+            mode="markers",
+            marker=dict(size=2, color="rgba(0,0,0,0)"),
+            hoverinfo="text",
+            showlegend=False
+        ), row=1, col=1)
 
-    # Curva de ocupación de operarios
-    if timeline:
-        df_oc = pd.DataFrame(timeline, columns=["tiempo", "ocupacion", "texto"])
-        df_oc["porcentaje"] = df_oc.apply(
-            lambda r: eval(r["texto"].replace("-", "0")).__truediv__(int(r["texto"].split("/")[-1]) or 1)*100,
-            axis=1
-        )
+    # Eje Y = labels "reverso" para que 1ª fila salga arriba
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=[y_map[l] + 0.45 for l in y_labels],
+        ticktext=y_labels,
+        autorange="reversed",
+        row=1, col=1
+    )
 
-        fig.add_trace(
-            go.Scatter(
-                x=df_oc["tiempo"],
-                y=df_oc["porcentaje"],
-                mode="lines+markers",
-                line=dict(color="firebrick"),
-                name="Ocupación (%)",
-                hoverinfo="x+y",
-                showlegend=False
-            ),
+    # ==========================================================
+    # 5) SUBPLOT 2: Diagrama de ocupación
+    #    Dibujamos rectángulos de [t_ini, t_fin] x [0,operarios_turno],
+    #    en gris, y luego [0, ocupacion] en azul (o similar).
+    # ==========================================================
+    # Añadimos shapes
+    for seg in timeline:
+        t0 = seg["t_ini"]
+        t1 = seg["t_fin"]
+        cap = seg["operarios_turno"]
+        occ = seg["ocupacion"]
+        pc = seg["%ocup"]
+
+        # Rect total (gris claro)
+        fig.add_shape(
+            type="rect",
+            x0=t0, x1=t1,
+            y0=0, y1=cap,
+            fillcolor="lightgray",
+            line=dict(width=0),
+            opacity=0.6,
             row=2, col=1
         )
 
-    fig.update_yaxes(title_text="Máquina.Capacidad", row=1, col=1, autorange="reversed")
-    fig.update_yaxes(title_text="%", row=2, col=1)
-    fig.update_xaxes(title_text="Tiempo", row=2, col=1)
+        # Rect ocupado
+        fig.add_shape(
+            type="rect",
+            x0=t0, x1=t1,
+            y0=0, y1=occ,
+            fillcolor="blue",
+            line=dict(width=0),
+            opacity=0.6,
+            row=2, col=1
+        )
+        # Scatter invisible para tooltip
+        fig.add_trace(go.Scatter(
+            x=[(t0+t1)/2],
+            y=[occ/2],
+            text=(f"t=[{t0},{t1})<br>"
+                  f"Capacidad={cap}, Ocup={occ}<br>"
+                  f"{pc}%"),
+            mode="markers",
+            marker=dict(size=2, color="rgba(0,0,0,0)"),
+            hoverinfo="text",
+            showlegend=False
+        ), row=2, col=1)
 
+    # Ajustar eje Y2 para que llegue hasta la máxima capacidad del timeline
+    max_cap = 0
+    for seg in timeline:
+        if seg["operarios_turno"] > max_cap:
+            max_cap = seg["operarios_turno"]
+
+    fig.update_yaxes(range=[0, max_cap+1], row=2, col=1, title="Operarios")
+
+    # ==========================================================
+    # 6) AJUSTES FINALES
+    # ==========================================================
     fig.update_layout(
+        title="Planificación - Gantt + Ocupación",
+        hovermode="x unified",
+        width=1100,
         height=700,
-        title="Planificación + Tasa de ocupación de operarios",
-        margin=dict(l=60, r=40, t=60, b=40)
+        template="plotly_white"
     )
 
-    print("✅ Mostrando figura interactiva...\n")
     fig.show()
