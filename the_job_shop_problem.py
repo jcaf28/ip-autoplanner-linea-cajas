@@ -160,9 +160,9 @@ if __name__ == "__main__":
                         df_capac,
                         tareas=sol_tareas,
                         timeline=timeline,
-                        imprimir=True,
-                        exportar=True,
+                        imprimir=False,
+                        exportar=False,
                         output_dir=output_dir,
-                        generar_gantt=False,
+                        generar_gantt=True,
                         guardar_raw=True,  
                       )

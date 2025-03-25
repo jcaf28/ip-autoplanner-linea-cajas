@@ -4,16 +4,10 @@ from plotly.subplots import make_subplots
 from collections import defaultdict
 
 def generar_diagrama_gantt(tareas, timeline, df_capac):
-    """
-    Genera un Gantt (arriba) y un gráfico de ocupación (abajo) usando Plotly.
-    """
-
-    # =======================
-    # 1. Preparar estructuras
-    # =======================
-    map_maq = {}
-    for _, row in df_capac.iterrows():
-        map_maq[row["ubicación"]] = (row["nom_ubicacion"], int(row["capacidad"]))
+    map_maq = {
+        row["ubicación"]: (row["nom_ubicacion"], int(row["capacidad"]))
+        for _, row in df_capac.iterrows()
+    }
 
     tareas_por_maquina = defaultdict(list)
     for t in tareas:
@@ -42,7 +36,6 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
 
     color_map = {}
     color_idx = 0
-
     for t in tareas:
         m = t["machine"]
         nom, cap = map_maq.get(m, (f"Maq{m}", 1))
@@ -53,9 +46,6 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
             color_idx += 1
         t["color"] = color_map[t["pedido"]]
 
-    # ========================================
-    # 2. Crear figura con subplots Gantt + Ocupación
-    # ========================================
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
@@ -63,9 +53,6 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
         vertical_spacing=0.05
     )
 
-    # =============================
-    # 3. GANTT (subplot 1)
-    # =============================
     y_labels = sorted(set(t["y_label"] for t in tareas))
 
     def extraer_id_ubicacion(y_label):
@@ -85,10 +72,11 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
             base=[t["start"]],
             orientation="h",
             marker=dict(color=t["color"]),
-            hovertext=(f"Pedido: {t['pedido']}<br>"
-                        f"Maq: {t['machine']}<br>"
-                        f"Start: {t['start']} – End: {t['end']}<br>"
-                        f"x_op: {t['x_op']}, Dur: {t['duration']}"),
+            hovertext=(f"🧾 Pedido: {t['pedido']}<br>"
+                       f"🏭 Máquina: {t['machine']}<br>"
+                       f"🕒 {t['timestamp_ini']} → {t['timestamp_fin']}<br>"
+                       f"👷 Operarios: {t['x_op']}<br>"
+                       f"⏱️ Duración: {t['duration']} min"),
             hoverinfo="text",
             showlegend=False
         ), row=1, col=1)
@@ -101,17 +89,16 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
         title="Ubicación"
     )
 
-    # =============================
-    # 4. OCUPACIÓN (subplot 2) con eje X numérico
-    # =============================
+    # Subplot de ocupación
     for seg in timeline:
         t_ini = seg["t_ini"]
         t_fin = seg["t_fin"]
         cap = seg["operarios_turno"]
         occ = seg["ocupacion"]
         porc = seg["%ocup"]
+        ts_ini = seg["timestamp_ini"]
+        ts_fin = seg["timestamp_fin"]
 
-        # Fondo: capacidad total (gris)
         fig.add_trace(go.Scatter(
             x=[t_ini, t_fin, t_fin, t_ini],
             y=[0, 0, cap, cap],
@@ -123,7 +110,6 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
             showlegend=False
         ), row=2, col=1)
 
-        # Ocupación: operarios activos (azul)
         fig.add_trace(go.Scatter(
             x=[t_ini, t_fin, t_fin, t_ini],
             y=[0, 0, occ, occ],
@@ -131,14 +117,16 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
             fillcolor="blue",
             line=dict(color="blue"),
             opacity=0.7,
-            text=f"{occ}/{cap} → {porc}%",
+            text=f"{ts_ini} → {ts_fin}<br>{occ}/{cap} → {porc}%",
             hoverinfo="text",
             showlegend=False
         ), row=2, col=1)
 
-    # =============================
-    # 5. Layouts
-    # =============================
+    fig.update_yaxes(
+        title="Operarios activos",
+        row=2, col=1
+    )
+
     fig.update_layout(
         title="Planificación: Gantt + Ocupación",
         barmode="overlay",
