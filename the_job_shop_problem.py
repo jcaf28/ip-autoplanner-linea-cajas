@@ -182,7 +182,7 @@ def planificar(ruta_excel):
     return sol_tareas, timeline, df_capac
 
 if __name__ == "__main__":
-    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v11_fechas_no_chill_toy.xlsx"
+    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v12_no_chill_toy copy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
     sol_tareas, timeline, df_capac = planificar(ruta_archivo_base)
@@ -192,7 +192,7 @@ if __name__ == "__main__":
                         tareas=sol_tareas,
                         timeline=timeline,
                         imprimir=False,
-                        exportar=False,
+                        exportar=True,
                         output_dir=output_dir,
                         generar_gantt=False,
                         guardar_raw=True,  
