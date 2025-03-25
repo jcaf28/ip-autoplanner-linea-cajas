@@ -8,7 +8,7 @@ def exportar_resultados_excel(capacidades, tareas, timeline, turnos_ocupacion, o
     os.makedirs(output_dir, exist_ok=True)
 
     df_tareas = pd.DataFrame(tareas)
-    df_timeline = pd.DataFrame(timeline, columns=["tiempo", "ocupacion", "texto"])
+    df_timeline = pd.DataFrame(timeline, columns=["t_ini", "t_fin", "ocupacion", "operarios_turno", "%ocup"])
     df_turnos = pd.DataFrame(turnos_ocupacion)
     df_capacidades = pd.DataFrame(capacidades)
 

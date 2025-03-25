@@ -130,121 +130,6 @@ def resolver_modelo(model):
     status = solver.Solve(model)
     return solver, status
 
-def calcular_ocupacion_turnos(tareas, intervals, capacity_per_interval):
-    # Esta función devolverá:
-    # 1) timeline: lista de (tiempo, ocupacion_acum, 'X/Y')
-    # 2) turnos: intervals enriquecido con ocupacion_media (%)
-
-    # Primero creamos los eventos
-    eventos = calcular_eventos_tareas(tareas)
-    if not eventos:
-        # Si no hay tareas con operarios, retornamos ocupación 0% en cada turno
-        out_turnos = []
-        for i, seg in enumerate(intervals):
-            cap_i = capacity_per_interval[i]
-            out_turnos.append({
-                "turno_id": i,
-                "comp_start": seg["comp_start"],
-                "comp_end": seg["comp_end"],
-                "capacidad": cap_i,
-                "ocupacion_media_%": 0
-            })
-        return [], out_turnos
-
-    # Timeline de cambios
-    timeline = []
-    ocupacion_actual = 0
-    tiempo_anterior = eventos[0][0]
-
-    # Para acumular ocupacion * tiempo en cada turno
-    # "uso_turno[i]" será la suma de (ocupacion * delta_tiempo) dentro del turno i
-    # "dur_turno[i]" será la duración total en minutos de ese turno i
-    uso_turno = [0]*len(intervals)
-    for i, seg in enumerate(intervals):
-        dur = seg["comp_end"] - seg["comp_start"]
-        uso_turno[i] = 0
-    # El puntero 'i_turno' lo usaremos para buscar qué turno corresponde a un cierto tiempo
-    # aunque veremos que a veces los eventos cruzan un turno parcial y hay que "partir" tiempos
-
-    def turno_de_tiempo(t):
-        # Devuelve el índice de turno en el que cae el tiempo 't', o -1 si está fuera de rango
-        for i, seg in enumerate(intervals):
-            if seg["comp_start"] <= t < seg["comp_end"]:
-                return i
-        return -1
-
-    idx_actual = turno_de_tiempo(tiempo_anterior)
-
-    for (tiempo_evento, delta_op) in eventos:
-        if tiempo_evento > tiempo_anterior:
-            # Del tiempo_anterior al tiempo_evento, la ocupacion_actual se mantiene fija
-            # Repartimos este tramo entre tantos turnos como se crucen
-            t_restante = tiempo_evento
-            while idx_actual != -1 and tiempo_anterior < t_restante:
-                fin_turno = intervals[idx_actual]["comp_end"]
-                tramo_fin = min(fin_turno, t_restante)
-                delta_t = tramo_fin - tiempo_anterior
-                if delta_t > 0:
-                    uso_turno[idx_actual] += (ocupacion_actual * delta_t)
-                    tiempo_anterior = tramo_fin
-                if tiempo_anterior >= fin_turno:
-                    idx_actual += 1
-                    if idx_actual >= len(intervals):
-                        idx_actual = -1
-                else:
-                    break
-
-        # Ajustamos la ocupación actual tras el evento
-        ocupacion_actual += delta_op
-        tiempo_anterior = tiempo_evento
-
-        # Guardamos el evento en timeline
-        idx_evt = turno_de_tiempo(tiempo_evento)
-        cap_evt = 0 if idx_evt == -1 else capacity_per_interval[idx_evt]
-        texto_cap = f"{ocupacion_actual}/{cap_evt}" if cap_evt > 0 else f"{ocupacion_actual}/-"
-        timeline.append((tiempo_evento, ocupacion_actual, texto_cap))
-
-        # Aseguramos que el índice actual de turno se actualice
-        idx_actual = idx_evt
-
-    # Si queda tiempo al final que no tuvo más eventos, se podría acumular en el turno correspondiente
-    # (ej: si la última tarea termina antes de que finalice su turno).
-    # Pero solemos no necesitarlo, salvo que quieras ver la ocupación "hasta final de turnos".
-
-    # Ahora calculamos la ocupación media en cada turno
-    # uso_turno[i] son "operarios * minutos" acumulados
-    # la capacidad total es capacity_per_interval[i]
-    # la duración total del turno es intervals[i]["comp_end"] - intervals[i]["comp_start"]
-    out_turnos = []
-    for i, seg in enumerate(intervals):
-        dur = seg["comp_end"] - seg["comp_start"]
-        cap_i = capacity_per_interval[i]
-        if dur > 0 and cap_i > 0:
-            # Promedio de ocupación real = (uso_turno[i]/dur) / cap_i
-            # en porcentaje => *100
-            ocupacion_media = (uso_turno[i] / dur) / cap_i
-        else:
-            ocupacion_media = 0
-        out_turnos.append({
-            "turno_id": i,
-            "comp_start": seg["comp_start"],
-            "comp_end": seg["comp_end"],
-            "capacidad": cap_i,
-            "ocupacion_media_%": round(100*ocupacion_media, 2)
-        })
-
-    return timeline, out_turnos
-
-def calcular_eventos_tareas(tareas):
-    eventos = []
-    for t in tareas:
-        xop = t["x_op"]
-        if xop > 0:
-            eventos.append((t["start"], +xop))  # Evento de inicio: + xop
-            eventos.append((t["end"], -xop))   # Evento de fin:    - xop
-    eventos.sort(key=lambda x: x[0])
-    return eventos
-
 def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval):
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         return [], [], []
@@ -265,11 +150,51 @@ def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval)
             "machine": varset["machine"]
         })
 
-    # Ordenamos las tareas por tiempo de inicio
     sol_tareas.sort(key=lambda x: x["start"])
 
-    # Construimos la línea de eventos y la ocupación de turnos
-    timeline, turnos_ocupacion = calcular_ocupacion_turnos(sol_tareas, intervals, capacity_per_interval)
+    # Nuevo timeline detallado
+    timeline = construir_timeline_detallado(sol_tareas, intervals, capacity_per_interval)
+
+    # (Opcional) si quieres seguir reportando la ocupación media
+    turnos_ocupacion = [] 
+    for i, seg in enumerate(intervals):
+        # Filtramos los tramos que caen (parcial o totalmente) en este turno
+        cap = capacity_per_interval[i]
+        dur_turno = seg["comp_end"] - seg["comp_start"]
+        if dur_turno <= 0:
+            turnos_ocupacion.append({
+                "turno_id": i,
+                "comp_start": seg["comp_start"],
+                "comp_end": seg["comp_end"],
+                "capacidad": cap,
+                "ocupacion_media_%": 0
+            })
+            continue
+
+        # Sumar "ocupacion * delta_t" en cada subtramo
+        uso_total = 0
+        for tramo in timeline:
+            ti = tramo["t_ini"]
+            tf = tramo["t_fin"]
+            if tf <= seg["comp_start"] or ti >= seg["comp_end"]:
+                continue
+            intersec_ini = max(ti, seg["comp_start"])
+            intersec_fin = min(tf, seg["comp_end"])
+            dur = intersec_fin - intersec_ini
+            uso_total += tramo["ocupacion"] * dur
+
+        if cap > 0:
+            ocup_media = (uso_total / dur_turno) / cap
+        else:
+            ocup_media = 0
+
+        turnos_ocupacion.append({
+            "turno_id": i,
+            "comp_start": seg["comp_start"],
+            "comp_end": seg["comp_end"],
+            "capacidad": cap,
+            "ocupacion_media_%": round(100 * ocup_media, 2)
+        })
 
     return sol_tareas, timeline, turnos_ocupacion
 
@@ -301,6 +226,78 @@ def planificar(ruta_excel):
 # EJEMPLO DE USO
 # ==================================================
 
+def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
+    """
+    Devuelve una lista de diccionarios, cada uno con:
+      t_ini, t_fin, ocupacion, operarios_turno, %ocup
+    contemplando cambios simultáneos en ocupación y límites de turnos.
+    """
+
+    def turno_idx_de_tiempo(t):
+        for i, seg in enumerate(intervals):
+            if seg["comp_start"] <= t < seg["comp_end"]:
+                return i
+        return -1
+
+    # 1) Generar eventos: +x_op en start, -x_op en end
+    #    + también añadimos los límites de turnos con delta_op=0
+    eventos = []
+    for tarea in tareas:
+        xop = tarea["x_op"]
+        if xop > 0:
+            eventos.append((tarea["start"], +xop))
+            eventos.append((tarea["end"],   -xop))
+    for i, seg in enumerate(intervals):
+        eventos.append((seg["comp_start"], 0))
+        eventos.append((seg["comp_end"],   0))
+
+    # 2) Ordenar eventos: primero por tiempo, si empatan
+    #    primero las entradas (+) y después las salidas (-)
+    eventos.sort(key=lambda e: (e[0], -e[1]))
+
+    # 3) Recorremos eventos para crear tramos [tiempo_i, tiempo_(i+1))
+    #    y en cada tramo calculamos la ocupación (acumulada) y
+    #    partimos dicho tramo según los límites de los turnos.
+    timeline = []
+    ocupacion_actual = 0
+
+    for i in range(len(eventos) - 1):
+        t0, delta_op = eventos[i]
+        # Actualizar ocupacion con el evento actual
+        ocupacion_actual += delta_op
+
+        t1 = eventos[i + 1][0]
+        if t1 > t0:
+            # Recorremos este rango [t0, t1) y lo partimos
+            # si cruza varios turnos
+            t_ini_segmento = t0
+            while t_ini_segmento < t1:
+                idx_turno = turno_idx_de_tiempo(t_ini_segmento)
+                if idx_turno == -1:
+                    break  # fuera de todos los turnos
+
+                fin_turno = intervals[idx_turno]["comp_end"]
+                t_fin_segmento = min(fin_turno, t1)
+                cap_turno = capacity_per_interval[idx_turno]
+
+                if cap_turno > 0:
+                    p_ocup = round(100 * ocupacion_actual / cap_turno, 2)
+                else:
+                    p_ocup = 0
+
+                timeline.append({
+                    "t_ini": t_ini_segmento,
+                    "t_fin": t_fin_segmento,
+                    "ocupacion": ocupacion_actual,
+                    "operarios_turno": cap_turno,
+                    "%ocup": p_ocup
+                })
+
+                t_ini_segmento = t_fin_segmento
+
+    return timeline
+
+
 if __name__ == "__main__":
     ruta_archivo_base = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
@@ -318,9 +315,3 @@ if __name__ == "__main__":
                         generar_gantt=False,
                         guardar_raw=True,  
                       )
-                        
-
-
-
-    
-
