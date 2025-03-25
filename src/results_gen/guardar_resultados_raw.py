@@ -1,7 +1,6 @@
 import os
 import pickle
 from datetime import datetime
-
 def guardar_resultados_raw(df_capac, tareas, timeline, output_dir, ruta_archivo_base):
     raw_dir = os.path.join(output_dir, "raw")
     os.makedirs(raw_dir, exist_ok=True)

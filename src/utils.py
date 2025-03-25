@@ -2,7 +2,7 @@
 
 import math
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from ortools.sat.python import cp_model
 
 # ==================================================
@@ -125,6 +125,47 @@ def construir_estructura_tareas(df_tareas, df_capac):
 
     return job_dict, precedences, machine_capacity
 
+from datetime import datetime, timedelta
+
+def descomprimir_tiempo(t, df_calend, modo="ini"):
+    """
+    Convierte un minuto acumulado `t` a un timestamp.
+    - modo="ini": descompresión de inicio -> se asocia al inicio del turno donde cae t
+    - modo="fin": descompresión de fin -> si t cae justo al final de un turno, se asocia a ese final
+    """
+    df_calend = df_calend.copy()
+
+    df_calend["hora_inicio"] = pd.to_datetime(df_calend["hora_inicio"], format="%H:%M:%S").dt.time
+    df_calend["hora_fin"]    = pd.to_datetime(df_calend["hora_fin"],    format="%H:%M:%S").dt.time
+
+    df_calend["dur_min"] = [
+        (datetime.combine(row["dia"], row["hora_fin"]) - datetime.combine(row["dia"], row["hora_inicio"])).total_seconds() / 60
+        for _, row in df_calend.iterrows()
+    ]
+    df_calend["dur_min"] = df_calend["dur_min"].astype(int)
+
+    df_calend = df_calend.sort_values(by=["dia", "hora_inicio"]).reset_index(drop=True)
+
+    acumulado = 0
+    for _, row in df_calend.iterrows():
+        dur = row["dur_min"]
+        comp_start = acumulado
+        comp_end = acumulado + dur
+
+        if modo == "ini" and comp_start <= t < comp_end:
+            delta = t - comp_start
+            base_dt = datetime.combine(row["dia"], row["hora_inicio"])
+            return base_dt + timedelta(minutes=int(delta))
+
+        elif modo == "fin" and comp_start < t <= comp_end:
+            delta = t - comp_start
+            base_dt = datetime.combine(row["dia"], row["hora_inicio"])
+            return base_dt + timedelta(minutes=int(delta))
+
+        acumulado = comp_end
+
+    return None  # fuera de calendario
+
 def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
     """
     Devuelve una lista de diccionarios, cada uno con:
@@ -196,7 +237,7 @@ def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
 
     return timeline
 
-def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval):
+def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval, df_calend):
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         return [], [], []
 
@@ -206,6 +247,8 @@ def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval)
         en = solver.Value(varset["end"])
         xop = solver.Value(varset["x_op"])
         dur = solver.Value(varset["duration"])
+        ts_ini = descomprimir_tiempo(st, df_calend, modo="ini")
+        ts_fin = descomprimir_tiempo(en, df_calend, modo="fin")
         sol_tareas.append({
             "pedido": pedido,
             "t_idx": t_idx,
@@ -213,12 +256,18 @@ def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval)
             "end": en,
             "x_op": xop,
             "duration": dur,
-            "machine": varset["machine"]
+            "machine": varset["machine"],
+            "timestamp_ini": ts_ini,
+            "timestamp_fin": ts_fin
         })
 
     sol_tareas.sort(key=lambda x: x["start"])
 
-    # Nuevo timeline detallado
     timeline = construir_timeline_detallado(sol_tareas, intervals, capacity_per_interval)
+
+    # Añadir timestamp_ini y timestamp_fin también al timeline
+    for tramo in timeline:
+        tramo["timestamp_ini"] = descomprimir_tiempo(tramo["t_ini"], df_calend, modo="ini")
+        tramo["timestamp_fin"] = descomprimir_tiempo(tramo["t_fin"], df_calend, modo="fin")
 
     return sol_tareas, timeline

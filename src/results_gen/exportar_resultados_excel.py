@@ -8,7 +8,7 @@ def exportar_resultados_excel(capacidades, tareas, timeline, output_dir, open_fi
     os.makedirs(output_dir, exist_ok=True)
 
     df_tareas = pd.DataFrame(tareas)
-    df_timeline = pd.DataFrame(timeline, columns=["t_ini", "t_fin", "ocupacion", "operarios_turno", "%ocup"])
+    df_timeline = pd.DataFrame(timeline)
     df_capacidades = pd.DataFrame(capacidades)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -24,6 +24,7 @@ def exportar_resultados_excel(capacidades, tareas, timeline, output_dir, open_fi
 
     if open_file_location:
         abrir_explorador(output_dir)
+
 
 def abrir_explorador(path):
     sistema = platform.system()

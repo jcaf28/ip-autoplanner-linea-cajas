@@ -145,9 +145,10 @@ def planificar(ruta_excel):
                                       cap_int)
 
     solver, status = resolver_modelo(model)
-    sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int)
+    sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int, df_calend)
 
     return sol_tareas, timeline, df_capac
+
 
 if __name__ == "__main__":
     ruta_archivo_base = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
@@ -160,8 +161,8 @@ if __name__ == "__main__":
                         tareas=sol_tareas,
                         timeline=timeline,
                         imprimir=True,
-                        exportar=False,
+                        exportar=True,
                         output_dir=output_dir,
                         generar_gantt=False,
-                        guardar_raw=False,  
+                        guardar_raw=True,  
                       )
