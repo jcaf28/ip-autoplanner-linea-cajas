@@ -102,7 +102,7 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
     )
 
     # =============================
-    # 4. OCUPACIÓN (subplot 2)
+    # 4. OCUPACIÓN (subplot 2) con eje X numérico
     # =============================
     for seg in timeline:
         t_ini = seg["t_ini"]
@@ -111,32 +111,33 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
         occ = seg["ocupacion"]
         porc = seg["%ocup"]
 
-        x_label = f"{t_ini}–{t_fin}"
-
-        fig.add_trace(go.Bar(
-            x=[x_label],
-            y=[cap],
-            marker_color="lightgray",
+        # Fondo: capacidad total (gris)
+        fig.add_trace(go.Scatter(
+            x=[t_ini, t_fin, t_fin, t_ini],
+            y=[0, 0, cap, cap],
+            fill="toself",
+            fillcolor="lightgray",
+            line=dict(color="lightgray"),
+            opacity=0.5,
             hoverinfo="skip",
             showlegend=False
         ), row=2, col=1)
 
-        fig.add_trace(go.Bar(
-            x=[x_label],
-            y=[occ],
-            marker_color="blue",
-            text=[f"{occ}/{cap} → {porc}%"],
+        # Ocupación: operarios activos (azul)
+        fig.add_trace(go.Scatter(
+            x=[t_ini, t_fin, t_fin, t_ini],
+            y=[0, 0, occ, occ],
+            fill="toself",
+            fillcolor="blue",
+            line=dict(color="blue"),
+            opacity=0.7,
+            text=f"{occ}/{cap} → {porc}%",
             hoverinfo="text",
             showlegend=False
         ), row=2, col=1)
 
-    fig.update_yaxes(
-        title="Operarios activos",
-        row=2, col=1
-    )
-
     # =============================
-    # 5. Layout
+    # 5. Layouts
     # =============================
     fig.update_layout(
         title="Planificación: Gantt + Ocupación",
