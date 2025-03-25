@@ -2,7 +2,8 @@
 
 import math
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
+from ortools.sat.python import cp_model
 
 # ==================================================
 # 1) UTILIDADES DE LECTURA Y CALENDARIO
@@ -123,3 +124,101 @@ def construir_estructura_tareas(df_tareas, df_capac):
                     precedences[pedido].append((idxA, idxB))
 
     return job_dict, precedences, machine_capacity
+
+def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
+    """
+    Devuelve una lista de diccionarios, cada uno con:
+      t_ini, t_fin, ocupacion, operarios_turno, %ocup
+    contemplando cambios simultáneos en ocupación y límites de turnos.
+    """
+
+    def turno_idx_de_tiempo(t):
+        for i, seg in enumerate(intervals):
+            if seg["comp_start"] <= t < seg["comp_end"]:
+                return i
+        return -1
+
+    # 1) Generar eventos: +x_op en start, -x_op en end
+    #    + también añadimos los límites de turnos con delta_op=0
+    eventos = []
+    for tarea in tareas:
+        xop = tarea["x_op"]
+        if xop > 0:
+            eventos.append((tarea["start"], +xop))
+            eventos.append((tarea["end"],   -xop))
+    for i, seg in enumerate(intervals):
+        eventos.append((seg["comp_start"], 0))
+        eventos.append((seg["comp_end"],   0))
+
+    # 2) Ordenar eventos: primero por tiempo, si empatan
+    #    primero las entradas (+) y después las salidas (-)
+    eventos.sort(key=lambda e: (e[0], -e[1]))
+
+    # 3) Recorremos eventos para crear tramos [tiempo_i, tiempo_(i+1))
+    #    y en cada tramo calculamos la ocupación (acumulada) y
+    #    partimos dicho tramo según los límites de los turnos.
+    timeline = []
+    ocupacion_actual = 0
+
+    for i in range(len(eventos) - 1):
+        t0, delta_op = eventos[i]
+        # Actualizar ocupacion con el evento actual
+        ocupacion_actual += delta_op
+
+        t1 = eventos[i + 1][0]
+        if t1 > t0:
+            # Recorremos este rango [t0, t1) y lo partimos
+            # si cruza varios turnos
+            t_ini_segmento = t0
+            while t_ini_segmento < t1:
+                idx_turno = turno_idx_de_tiempo(t_ini_segmento)
+                if idx_turno == -1:
+                    break  # fuera de todos los turnos
+
+                fin_turno = intervals[idx_turno]["comp_end"]
+                t_fin_segmento = min(fin_turno, t1)
+                cap_turno = capacity_per_interval[idx_turno]
+
+                if cap_turno > 0:
+                    p_ocup = round(100 * ocupacion_actual / cap_turno, 2)
+                else:
+                    p_ocup = 0
+
+                timeline.append({
+                    "t_ini": t_ini_segmento,
+                    "t_fin": t_fin_segmento,
+                    "ocupacion": ocupacion_actual,
+                    "operarios_turno": cap_turno,
+                    "%ocup": p_ocup
+                })
+
+                t_ini_segmento = t_fin_segmento
+
+    return timeline
+
+def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval):
+    if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        return [], [], []
+
+    sol_tareas = []
+    for (pedido, t_idx), varset in all_vars.items():
+        st = solver.Value(varset["start"])
+        en = solver.Value(varset["end"])
+        xop = solver.Value(varset["x_op"])
+        dur = solver.Value(varset["duration"])
+        sol_tareas.append({
+            "pedido": pedido,
+            "t_idx": t_idx,
+            "start": st,
+            "end": en,
+            "x_op": xop,
+            "duration": dur,
+            "machine": varset["machine"]
+        })
+
+    sol_tareas.sort(key=lambda x: x["start"])
+
+    # Nuevo timeline detallado
+    timeline = construir_timeline_detallado(sol_tareas, intervals, capacity_per_interval)
+
+    return sol_tareas, timeline

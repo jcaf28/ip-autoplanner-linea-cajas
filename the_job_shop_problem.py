@@ -5,7 +5,7 @@ import pandas as pd
 import collections
 from ortools.sat.python import cp_model
 
-from src.utils import leer_datos, comprimir_calendario, construir_estructura_tareas
+from src.utils import leer_datos, comprimir_calendario, construir_estructura_tareas, extraer_solucion
 from src.results_gen.entry import mostrar_resultados
 
 def crear_modelo_cp(job_dict,
@@ -130,33 +130,6 @@ def resolver_modelo(model):
     status = solver.Solve(model)
     return solver, status
 
-def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval):
-    if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        return [], [], []
-
-    sol_tareas = []
-    for (pedido, t_idx), varset in all_vars.items():
-        st = solver.Value(varset["start"])
-        en = solver.Value(varset["end"])
-        xop = solver.Value(varset["x_op"])
-        dur = solver.Value(varset["duration"])
-        sol_tareas.append({
-            "pedido": pedido,
-            "t_idx": t_idx,
-            "start": st,
-            "end": en,
-            "x_op": xop,
-            "duration": dur,
-            "machine": varset["machine"]
-        })
-
-    sol_tareas.sort(key=lambda x: x["start"])
-
-    # Nuevo timeline detallado
-    timeline = construir_timeline_detallado(sol_tareas, intervals, capacity_per_interval)
-
-    return sol_tareas, timeline
-
 def planificar(ruta_excel):
     datos = leer_datos(ruta_excel)
     df_tareas = datos["df_tareas"]
@@ -177,78 +150,6 @@ def planificar(ruta_excel):
 
     return sol_tareas, timeline, df_capac
 
-def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
-    """
-    Devuelve una lista de diccionarios, cada uno con:
-      t_ini, t_fin, ocupacion, operarios_turno, %ocup
-    contemplando cambios simultáneos en ocupación y límites de turnos.
-    """
-
-    def turno_idx_de_tiempo(t):
-        for i, seg in enumerate(intervals):
-            if seg["comp_start"] <= t < seg["comp_end"]:
-                return i
-        return -1
-
-    # 1) Generar eventos: +x_op en start, -x_op en end
-    #    + también añadimos los límites de turnos con delta_op=0
-    eventos = []
-    for tarea in tareas:
-        xop = tarea["x_op"]
-        if xop > 0:
-            eventos.append((tarea["start"], +xop))
-            eventos.append((tarea["end"],   -xop))
-    for i, seg in enumerate(intervals):
-        eventos.append((seg["comp_start"], 0))
-        eventos.append((seg["comp_end"],   0))
-
-    # 2) Ordenar eventos: primero por tiempo, si empatan
-    #    primero las entradas (+) y después las salidas (-)
-    eventos.sort(key=lambda e: (e[0], -e[1]))
-
-    # 3) Recorremos eventos para crear tramos [tiempo_i, tiempo_(i+1))
-    #    y en cada tramo calculamos la ocupación (acumulada) y
-    #    partimos dicho tramo según los límites de los turnos.
-    timeline = []
-    ocupacion_actual = 0
-
-    for i in range(len(eventos) - 1):
-        t0, delta_op = eventos[i]
-        # Actualizar ocupacion con el evento actual
-        ocupacion_actual += delta_op
-
-        t1 = eventos[i + 1][0]
-        if t1 > t0:
-            # Recorremos este rango [t0, t1) y lo partimos
-            # si cruza varios turnos
-            t_ini_segmento = t0
-            while t_ini_segmento < t1:
-                idx_turno = turno_idx_de_tiempo(t_ini_segmento)
-                if idx_turno == -1:
-                    break  # fuera de todos los turnos
-
-                fin_turno = intervals[idx_turno]["comp_end"]
-                t_fin_segmento = min(fin_turno, t1)
-                cap_turno = capacity_per_interval[idx_turno]
-
-                if cap_turno > 0:
-                    p_ocup = round(100 * ocupacion_actual / cap_turno, 2)
-                else:
-                    p_ocup = 0
-
-                timeline.append({
-                    "t_ini": t_ini_segmento,
-                    "t_fin": t_fin_segmento,
-                    "ocupacion": ocupacion_actual,
-                    "operarios_turno": cap_turno,
-                    "%ocup": p_ocup
-                })
-
-                t_ini_segmento = t_fin_segmento
-
-    return timeline
-
-
 if __name__ == "__main__":
     ruta_archivo_base = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
@@ -260,8 +161,8 @@ if __name__ == "__main__":
                         tareas=sol_tareas,
                         timeline=timeline,
                         imprimir=True,
-                        exportar=True,
+                        exportar=False,
                         output_dir=output_dir,
                         generar_gantt=False,
-                        guardar_raw=True,  
+                        guardar_raw=False,  
                       )
