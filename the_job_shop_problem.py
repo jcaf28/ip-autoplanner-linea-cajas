@@ -1,7 +1,6 @@
 # PATH: the_job_shop_problem.py
 
 import math
-import pandas as pd
 import collections
 from ortools.sat.python import cp_model
 
