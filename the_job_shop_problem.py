@@ -5,71 +5,8 @@ import pandas as pd
 import collections
 from ortools.sat.python import cp_model
 
-from src.utils import (leer_datos, comprimir_calendario)
-from src.plot_gantt import generar_diagrama_gantt, trazar_ocupacion_operarios
-
-# ==================================================
-# 2) ESTRUCTURA DE TAREAS Y PRECEDENCIAS
-# ==================================================
-
-def construir_estructura_tareas(df_tareas, df_capac):
-    machine_capacity = {}
-    for _, rowc in df_capac.iterrows():
-        ub = int(rowc["ubicación"])
-        machine_capacity[ub] = int(rowc["capacidad"])
-
-    job_dict = {}
-    precedences = {}
-    df_tareas = df_tareas.sort_values(by=["material_padre", "id_interno"])
-
-    for pedido, grupo in df_tareas.groupby("material_padre"):
-        job_dict[pedido] = []
-        precedences[pedido] = []
-
-        lista_tareas = list(grupo["id_interno"])
-        for _, rowt in grupo.iterrows():
-            tid = rowt["id_interno"]
-            loc = int(rowt["ubicación"])
-            tipo = str(rowt["tipo_tarea"])
-            base_op = rowt["tiempo_operario"]  # en horas
-            t_verif = rowt["tiempo_verificado"]
-            nmax = int(rowt["num_operarios_max"])
-
-            if tipo == "OPERATIVA":
-                # Para tareas operativas, requerimos al menos 1 operario
-                tiempo_base = math.ceil(base_op * 60)
-                min_op = 1
-                max_op = nmax
-            elif tipo == "VERIFICADO":
-                # Para tareas de verificado, no se necesitan operarios
-                tiempo_base = math.ceil(t_verif * 60)
-                min_op = 0
-                max_op = 0
-            else:
-                tiempo_base = 0
-                min_op = 0
-                max_op = 0
-
-            # Ahora agregamos 6 elementos en el tuple
-            job_dict[pedido].append((tid, loc, tiempo_base, min_op, max_op, tipo))
-
-        for _, rowt in grupo.iterrows():
-            current_id = rowt["id_interno"]
-            preds_str = rowt["predecesora"]
-            if pd.isna(preds_str) or preds_str == "":
-                continue
-            for p in str(preds_str).split(";"):
-                p = p.strip()
-                if p:
-                    idxA = lista_tareas.index(int(p))
-                    idxB = lista_tareas.index(int(current_id))
-                    precedences[pedido].append((idxA, idxB))
-
-    return job_dict, precedences, machine_capacity
-
-# ==================================================
-# 3) CREACIÓN DEL MODELO CP-SAT
-# ==================================================
+from src.utils import leer_datos, comprimir_calendario, construir_estructura_tareas
+from src.results_gen.entry import mostrar_resultados
 
 def crear_modelo_cp(job_dict,
                     precedences,
@@ -187,10 +124,6 @@ def crear_modelo_cp(job_dict,
     model.Minimize(obj_var)
 
     return model, all_vars
-
-# ==================================================
-# 4) RESOLUCIÓN Y SALIDA
-# ==================================================
 
 def resolver_modelo(model):
     solver = cp_model.CpSolver()
@@ -340,29 +273,6 @@ def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval)
 
     return sol_tareas, timeline, turnos_ocupacion
 
-
-def imprimir_solucion(tareas, timeline, turnos_ocupacion):
-    if not tareas:
-        print("No hay solución factible.")
-        return
-    makespan = max(t["end"] for t in tareas)
-    print(f"\nSOLUCIÓN Factible - Makespan = {makespan}")
-    for t in tareas:
-        print(f" Pedido={t['pedido']} t_idx={t['t_idx']}, "
-              f"Maq={t['machine']}, start={t['start']}, "
-              f"end={t['end']}, x_op={t['x_op']} (dur={t['duration']})")
-
-    print("\nTimeline de ocupación (cambios de número de operarios):")
-    for evt in timeline:
-        print(f"  t={evt[0]} -> Operarios activos: {evt[2]}")
-
-    print("\nOcupación media por turno:")
-    for turno in turnos_ocupacion:
-        print(f"  Turno={turno['turno_id']} "
-              f"[{turno['comp_start']},{turno['comp_end']}], "
-              f"cap={turno['capacidad']} -> "
-              f"ocupacion_media={turno['ocupacion_media_%']}%")
-
 # ==================================================
 # 5) FUNCIÓN PRINCIPAL
 # ==================================================
@@ -385,23 +295,29 @@ def planificar(ruta_excel):
     solver, status = resolver_modelo(model)
     sol_tareas, timeline, turnos_ocupacion = extraer_solucion(solver, status, all_vars, intervals, cap_int)
 
-    imprimir_solucion(sol_tareas, timeline, turnos_ocupacion)
-    return sol_tareas, intervals
+    return sol_tareas, timeline, turnos_ocupacion
 
 # ==================================================
 # EJEMPLO DE USO
 # ==================================================
+
 if __name__ == "__main__":
     ruta = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
-    sol_tareas, sol_intervals = planificar(ruta)
+    output_dir = "archivos/db_dev/output/google-or"
 
-    # # Ocupación de operarios
-    # fig_operarios = trazar_ocupacion_operarios(sol_intervals)
-    # fig_operarios.show()
+    sol_tareas, timeline, turnos_ocupacion = planificar(ruta)
 
-    # # Gantt de tareas
-    # fig_gantt = generar_diagrama_gantt(sol_tareas)
-    # fig_gantt.show()
+    mostrar_resultados(
+        tareas=sol_tareas,
+        timeline=timeline,
+        turnos_ocupacion=turnos_ocupacion,
+        imprimir=True,
+        exportar=False,
+        output_dir=output_dir,
+        generar_gantt=True
+    )
+
+
 
     
 

@@ -30,28 +30,3 @@ def generar_diagrama_gantt(sol_tareas):
 
     return fig
 
-
-
-def trazar_ocupacion_operarios(sol_intervals):
-    import plotly.express as px
-    import pandas as pd
-
-    filas = []
-    for iv in sol_intervals:
-        cini = iv["comp_start"]
-        cfin = iv["comp_end"]
-        val = iv["operarios_ocupados"]
-        filas.append({"tiempo": cini, "ocupados": val})
-        filas.append({"tiempo": cfin, "ocupados": val})
-
-    df = pd.DataFrame(filas)
-    df = df.sort_values("tiempo")
-
-    fig = px.line(
-        df,
-        x="tiempo",
-        y="ocupados",
-        markers=True,
-        title="Ocupación de operarios en el tiempo"
-    )
-    return fig
