@@ -1,2 +1,2 @@
-# PATH: src/service/__init__.py
+# PATH: src/results_gen/__init__.py
 

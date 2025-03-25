@@ -302,20 +302,22 @@ def planificar(ruta_excel):
 # ==================================================
 
 if __name__ == "__main__":
-    ruta = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
+    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
-    sol_tareas, timeline, turnos_ocupacion = planificar(ruta)
+    sol_tareas, timeline, turnos_ocupacion = planificar(ruta_archivo_base)
 
     mostrar_resultados(
-        tareas=sol_tareas,
-        timeline=timeline,
-        turnos_ocupacion=turnos_ocupacion,
-        imprimir=True,
-        exportar=False,
-        output_dir=output_dir,
-        generar_gantt=True
-    )
+    ruta_archivo_base,
+    tareas=sol_tareas,
+    timeline=timeline,
+    turnos_ocupacion=turnos_ocupacion,
+    imprimir=False,
+    exportar=False,
+    output_dir=output_dir,
+    generar_gantt=False,
+    guardar_raw=True,  
+)
 
 
 

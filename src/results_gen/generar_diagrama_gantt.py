@@ -1,40 +1,82 @@
-# PATH: src/service/generar_diagrama_gantt.py
+# PATH: src/results_gen/generar_diagrama_gantt.py
 
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-def generar_diagrama_gantt(tareas):
+def generar_diagrama_gantt(tareas, timeline, turnos_ocupacion):
     if not tareas:
-        return None
+        print("⚠️ No hay tareas para graficar.")
+        return
 
-    df = pd.DataFrame(tareas)
+    print(f"✅ Graficando {len(tareas)} tareas y {len(timeline)} puntos de ocupación...")
 
-    # Creamos una etiqueta legible que incluya el número de operarios
-    df["Tarea"] = df.apply(
-        lambda row: f"{row['pedido']} (t{row['t_idx']}) - {row['x_op']} op", axis=1
+    df_t = pd.DataFrame(tareas)
+    df_t["label"] = df_t.apply(
+        lambda r: f"{r['pedido']} - {r['x_op']} op", axis=1
     )
 
-    # Creamos la figura Gantt
-    fig = px.timeline(
-        df,
-        x_start="start",
-        x_end="end",
-        y="machine",
-        color="pedido",
-        text="Tarea"
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.75, 0.25],
+        vertical_spacing=0.05,
+        subplot_titles=("Gantt de tareas por máquina", "Tasa de ocupación de operarios")
     )
 
-    # Estilo
-    fig.update_yaxes(title="Máquina")
-    fig.update_xaxes(title="Tiempo")
+    colors = {}
+    for i, row in df_t.iterrows():
+        pedido = row["pedido"]
+        if pedido not in colors:
+            colors[pedido] = f"hsl({hash(pedido)%360},50%,60%)"
+
+        fig.add_trace(
+            go.Bar(
+                x=[row["end"] - row["start"]],
+                y=[str(row["machine"])],
+                base=row["start"],
+                name=row["pedido"],
+                orientation='h',
+                text=row["label"],
+                hovertext=f"Pedido: {row['pedido']}<br>"
+                          f"Inicio: {row['start']}<br>"
+                          f"Fin: {row['end']}<br>"
+                          f"x_op: {row['x_op']}<br>"
+                          f"Máquina: {row['machine']}",
+                marker_color=colors[pedido],
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+
+    if timeline:
+        df_oc = pd.DataFrame(timeline, columns=["tiempo", "ocupacion", "texto"])
+        df_oc["porcentaje"] = df_oc.apply(
+            lambda r: eval(r["texto"].replace("-", "0")).__truediv__(int(r["texto"].split("/")[-1]) or 1)*100, axis=1
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=df_oc["tiempo"],
+                y=df_oc["porcentaje"],
+                mode="lines+markers",
+                line=dict(color="firebrick"),
+                name="Ocupación (%)",
+                hoverinfo="x+y",
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+
+    fig.update_yaxes(title_text="Máquina", row=1, col=1, autorange="reversed")
+    fig.update_yaxes(title_text="%", row=2, col=1)
+    fig.update_xaxes(title_text="Tiempo", row=2, col=1)
+
     fig.update_layout(
-        title="Diagrama de Gantt: planificación por máquina",
-        margin=dict(l=40, r=40, t=40, b=40),
-        height=500,
-        showlegend=False
+        height=700,
+        title="Planificación + Tasa de ocupación de operarios",
+        margin=dict(l=60, r=40, t=60, b=40)
     )
 
-    # Mostramos el número de operarios dentro de las barras
-    fig.update_traces(insidetextanchor="start", textposition="inside")
-
-    return fig
+    print("✅ Mostrando figura interactiva...\n")
+    fig.show()

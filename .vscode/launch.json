@@ -1,0 +1,13 @@
+// PATH: .vscode/launch.json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debugger",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/generar_gantt_desde_raw.py",
+      "console": "integratedTerminal"
+    }
+  ]
+}

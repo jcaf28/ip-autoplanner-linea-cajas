@@ -1,4 +1,4 @@
-# PATH: src/service/imprimir_resultados_consola.py
+# PATH: src/results_gen/imprimir_resultados_consola.py
 
 def imprimir_resultados_consola(tareas, timeline, turnos_ocupacion):
     if not tareas:
