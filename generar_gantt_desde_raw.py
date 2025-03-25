@@ -17,13 +17,15 @@ def cargar_y_generar_gantt(path_raw):
     tareas = datos.get("tareas", [])
     timeline = datos.get("timeline", [])
     turnos_ocupacion = datos.get("turnos_ocupacion", [])
+    capacidades = datos.get("capacidades", [])
 
     print(f"   • tareas: {len(tareas)} registros")
     print(f"   • timeline: {len(timeline)} eventos")
     print(f"   • turnos_ocupacion: {len(turnos_ocupacion)} turnos")
+    print(f"   • capacidades: {len(capacidades)} ubicaciones")
 
     print("\n📊 Generando diagrama de Gantt...\n")
-    generar_diagrama_gantt(tareas, timeline, turnos_ocupacion)
+    generar_diagrama_gantt(tareas, timeline, turnos_ocupacion, capacidades)
 
 def buscar_ultimo_pickle_en(directorio):
     if not os.path.isdir(directorio):
