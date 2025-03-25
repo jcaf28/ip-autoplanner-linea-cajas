@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-def generar_diagrama_gantt(tareas, timeline, turnos_ocupacion):
+def generar_diagrama_gantt(tareas, timeline, turnos_ocupacion, capacidades):
     if not tareas:
         print("⚠️ No hay tareas para graficar.")
         return

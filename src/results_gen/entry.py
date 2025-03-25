@@ -7,6 +7,7 @@ from src.results_gen.guardar_resultados_raw import guardar_resultados_raw  # <--
 
 
 def mostrar_resultados( ruta_archivo_base,
+                        df_capac,
                         tareas,
                         timeline,
                         turnos_ocupacion,
@@ -19,10 +20,10 @@ def mostrar_resultados( ruta_archivo_base,
         imprimir_resultados_consola(tareas, timeline, turnos_ocupacion)
 
     if exportar and output_dir:
-        exportar_resultados_excel(tareas, timeline, turnos_ocupacion, output_dir, open_file_location=False)
+        exportar_resultados_excel(df_capac, tareas, timeline, turnos_ocupacion, output_dir, open_file_location=False)
 
     if generar_gantt:
-        generar_diagrama_gantt(tareas, timeline, turnos_ocupacion)
+        generar_diagrama_gantt(tareas, timeline, turnos_ocupacion, df_capac)
 
     if guardar_raw and output_dir:
-        guardar_resultados_raw(tareas, timeline, turnos_ocupacion, output_dir, ruta_archivo_base)
+        guardar_resultados_raw(df_capac, tareas, timeline, turnos_ocupacion, output_dir, ruta_archivo_base)

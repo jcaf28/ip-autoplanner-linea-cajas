@@ -295,7 +295,7 @@ def planificar(ruta_excel):
     solver, status = resolver_modelo(model)
     sol_tareas, timeline, turnos_ocupacion = extraer_solucion(solver, status, all_vars, intervals, cap_int)
 
-    return sol_tareas, timeline, turnos_ocupacion
+    return sol_tareas, timeline, turnos_ocupacion, df_capac
 
 # ==================================================
 # EJEMPLO DE USO
@@ -305,19 +305,20 @@ if __name__ == "__main__":
     ruta_archivo_base = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
-    sol_tareas, timeline, turnos_ocupacion = planificar(ruta_archivo_base)
+    sol_tareas, timeline, turnos_ocupacion, df_capac = planificar(ruta_archivo_base)
 
-    mostrar_resultados(
-    ruta_archivo_base,
-    tareas=sol_tareas,
-    timeline=timeline,
-    turnos_ocupacion=turnos_ocupacion,
-    imprimir=False,
-    exportar=False,
-    output_dir=output_dir,
-    generar_gantt=False,
-    guardar_raw=True,  
-)
+    mostrar_resultados(ruta_archivo_base,
+                        df_capac,
+                        tareas=sol_tareas,
+                        timeline=timeline,
+                        turnos_ocupacion=turnos_ocupacion,
+                        imprimir=False,
+                        exportar=True,
+                        output_dir=output_dir,
+                        generar_gantt=False,
+                        guardar_raw=True,  
+                      )
+                        
 
 
 
