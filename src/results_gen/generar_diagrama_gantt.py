@@ -86,9 +86,9 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
             orientation="h",
             marker=dict(color=t["color"]),
             hovertext=(f"Pedido: {t['pedido']}<br>"
-                       f"Maq: {t['machine']}<br>"
-                       f"Start: {t['start']} – End: {t['end']}<br>"
-                       f"x_op: {t['x_op']}, Dur: {t['duration']}"),
+                        f"Maq: {t['machine']}<br>"
+                        f"Start: {t['start']} – End: {t['end']}<br>"
+                        f"x_op: {t['x_op']}, Dur: {t['duration']}"),
             hoverinfo="text",
             showlegend=False
         ), row=1, col=1)
