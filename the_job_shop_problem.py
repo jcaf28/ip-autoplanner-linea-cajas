@@ -1,9 +1,5 @@
 # PATH: the_job_shop_problem.py
 
-# ==================================================
-# Archivo único: planificacion_cajas.py
-# ==================================================
-
 import math
 import pandas as pd
 import collections
@@ -140,54 +136,46 @@ def crear_modelo_cp(job_dict,
         cap = machine_capacity.get(mach, 1)
         model.AddCumulative(ivars, demands, cap)
 
-    # Restricción: capacidad global de operarios por intervalo
-    # Para cada segmento i, sum(x_t) de las tareas que solapan no excede capacity_per_interval[i]
-    occupied_operators = []
+    # ==========================================
+    # NUEVO: Restricción por turnos - Operarios
+    # ==========================================
     for i, seg in enumerate(intervals):
         cini = seg["comp_start"]
         cfin = seg["comp_end"]
         cap_i = capacity_per_interval[i]
-        occ_var = model.NewIntVar(0, cap_i, f"occupied_{i}")
-        occupied_operators.append(occ_var)
 
-        # Creamos una lista para x_op de las tareas que se solapan con el segmento i
-        # Pero en CP-SAT necesitamos reificar "tarea t solapa con i" -> booleana "overlap_i_t"
-        overlap_sum = []
+        interval_list = []
+        demands = []
+
         for (pedido, t_idx), varset in all_vars.items():
+            xop = varset["x_op"]
+            interval_var = varset["interval"]
             st = varset["start"]
             en = varset["end"]
-            xop = varset["x_op"]
 
-            # overlap_i_t = 1 => la tarea se solapa con [cini, cfin)
-            ov = model.NewBoolVar(f"ov_{i}_{pedido}_{t_idx}")
-            # Si ov=1 => (st < cfin) AND (en > cini)
+            # Creamos una booleana: la tarea está dentro del intervalo de turno
+            ov = model.NewBoolVar(f"op_overlap_{i}_{pedido}_{t_idx}")
             model.Add(st < cfin).OnlyEnforceIf(ov)
             model.Add(en > cini).OnlyEnforceIf(ov)
-            # Si ov=0 => st >= cfin OR en <= cini
             b1 = model.NewBoolVar("")
             b2 = model.NewBoolVar("")
             model.Add(st >= cfin).OnlyEnforceIf(b1)
             model.Add(en <= cini).OnlyEnforceIf(b2)
             model.AddBoolOr([b1, b2]).OnlyEnforceIf(ov.Not())
 
-            # Queremos "overlap_i_t * x_op" en la suma.
-            # CP-SAT no multiplica directamente bool * intvar, lo hacemos con:
-            #   z = model.NewIntVar(0, cap_i, "")
-            #   z >= x_op - (1 - ov)*M  (M grande)
-            #   z <= x_op
-            #   z <= ov*M
-            # Este "z" será x_op si ov=1, o 0 si ov=0.
-            z = model.NewIntVar(0, cap_i, f"z_{i}_{pedido}_{t_idx}")
-            bigM = cap_i + 10  # un número que sea >= x_op máximo
-            model.Add(z >= xop - (1 - ov)*bigM)
-            model.Add(z <= xop)
-            model.Add(z <= ov*bigM)
-            overlap_sum.append(z)
+            # Solo añadimos tareas que pueden solaparse
+            interval_active = model.NewOptionalIntervalVar(
+                varset["start"],
+                varset["duration"],
+                varset["end"],
+                ov,
+                f"op_interval_{i}_{pedido}_{t_idx}"
+            )
 
-        # Sum de overlap_sum = occ_var
-        model.Add(occ_var == sum(overlap_sum))
-        # Y occ_var <= capacidad del intervalo i
-        model.Add(occ_var <= cap_i)
+            interval_list.append(interval_active)
+            demands.append(xop)
+
+        model.AddCumulative(interval_list, demands, cap_i)
 
     # Makespan: max de todos los end
     ends = []
@@ -198,7 +186,7 @@ def crear_modelo_cp(job_dict,
     model.AddMaxEquality(obj_var, ends)
     model.Minimize(obj_var)
 
-    return model, all_vars, occupied_operators
+    return model, all_vars
 
 # ==================================================
 # 4) RESOLUCIÓN Y SALIDA
@@ -209,11 +197,125 @@ def resolver_modelo(model):
     status = solver.Solve(model)
     return solver, status
 
-def extraer_solucion(solver, status, all_vars, intervals, occupied_operators):
-    if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        return [], []
+def calcular_ocupacion_turnos(tareas, intervals, capacity_per_interval):
+    # Esta función devolverá:
+    # 1) timeline: lista de (tiempo, ocupacion_acum, 'X/Y')
+    # 2) turnos: intervals enriquecido con ocupacion_media (%)
 
-    # Tareas
+    # Primero creamos los eventos
+    eventos = calcular_eventos_tareas(tareas)
+    if not eventos:
+        # Si no hay tareas con operarios, retornamos ocupación 0% en cada turno
+        out_turnos = []
+        for i, seg in enumerate(intervals):
+            cap_i = capacity_per_interval[i]
+            out_turnos.append({
+                "turno_id": i,
+                "comp_start": seg["comp_start"],
+                "comp_end": seg["comp_end"],
+                "capacidad": cap_i,
+                "ocupacion_media_%": 0
+            })
+        return [], out_turnos
+
+    # Timeline de cambios
+    timeline = []
+    ocupacion_actual = 0
+    tiempo_anterior = eventos[0][0]
+
+    # Para acumular ocupacion * tiempo en cada turno
+    # "uso_turno[i]" será la suma de (ocupacion * delta_tiempo) dentro del turno i
+    # "dur_turno[i]" será la duración total en minutos de ese turno i
+    uso_turno = [0]*len(intervals)
+    for i, seg in enumerate(intervals):
+        dur = seg["comp_end"] - seg["comp_start"]
+        uso_turno[i] = 0
+    # El puntero 'i_turno' lo usaremos para buscar qué turno corresponde a un cierto tiempo
+    # aunque veremos que a veces los eventos cruzan un turno parcial y hay que "partir" tiempos
+
+    def turno_de_tiempo(t):
+        # Devuelve el índice de turno en el que cae el tiempo 't', o -1 si está fuera de rango
+        for i, seg in enumerate(intervals):
+            if seg["comp_start"] <= t < seg["comp_end"]:
+                return i
+        return -1
+
+    idx_actual = turno_de_tiempo(tiempo_anterior)
+
+    for (tiempo_evento, delta_op) in eventos:
+        if tiempo_evento > tiempo_anterior:
+            # Del tiempo_anterior al tiempo_evento, la ocupacion_actual se mantiene fija
+            # Repartimos este tramo entre tantos turnos como se crucen
+            t_restante = tiempo_evento
+            while idx_actual != -1 and tiempo_anterior < t_restante:
+                fin_turno = intervals[idx_actual]["comp_end"]
+                tramo_fin = min(fin_turno, t_restante)
+                delta_t = tramo_fin - tiempo_anterior
+                if delta_t > 0:
+                    uso_turno[idx_actual] += (ocupacion_actual * delta_t)
+                    tiempo_anterior = tramo_fin
+                if tiempo_anterior >= fin_turno:
+                    idx_actual += 1
+                    if idx_actual >= len(intervals):
+                        idx_actual = -1
+                else:
+                    break
+
+        # Ajustamos la ocupación actual tras el evento
+        ocupacion_actual += delta_op
+        tiempo_anterior = tiempo_evento
+
+        # Guardamos el evento en timeline
+        idx_evt = turno_de_tiempo(tiempo_evento)
+        cap_evt = 0 if idx_evt == -1 else capacity_per_interval[idx_evt]
+        texto_cap = f"{ocupacion_actual}/{cap_evt}" if cap_evt > 0 else f"{ocupacion_actual}/-"
+        timeline.append((tiempo_evento, ocupacion_actual, texto_cap))
+
+        # Aseguramos que el índice actual de turno se actualice
+        idx_actual = idx_evt
+
+    # Si queda tiempo al final que no tuvo más eventos, se podría acumular en el turno correspondiente
+    # (ej: si la última tarea termina antes de que finalice su turno).
+    # Pero solemos no necesitarlo, salvo que quieras ver la ocupación "hasta final de turnos".
+
+    # Ahora calculamos la ocupación media en cada turno
+    # uso_turno[i] son "operarios * minutos" acumulados
+    # la capacidad total es capacity_per_interval[i]
+    # la duración total del turno es intervals[i]["comp_end"] - intervals[i]["comp_start"]
+    out_turnos = []
+    for i, seg in enumerate(intervals):
+        dur = seg["comp_end"] - seg["comp_start"]
+        cap_i = capacity_per_interval[i]
+        if dur > 0 and cap_i > 0:
+            # Promedio de ocupación real = (uso_turno[i]/dur) / cap_i
+            # en porcentaje => *100
+            ocupacion_media = (uso_turno[i] / dur) / cap_i
+        else:
+            ocupacion_media = 0
+        out_turnos.append({
+            "turno_id": i,
+            "comp_start": seg["comp_start"],
+            "comp_end": seg["comp_end"],
+            "capacidad": cap_i,
+            "ocupacion_media_%": round(100*ocupacion_media, 2)
+        })
+
+    return timeline, out_turnos
+
+def calcular_eventos_tareas(tareas):
+    eventos = []
+    for t in tareas:
+        xop = t["x_op"]
+        if xop > 0:
+            eventos.append((t["start"], +xop))  # Evento de inicio: + xop
+            eventos.append((t["end"], -xop))   # Evento de fin:    - xop
+    eventos.sort(key=lambda x: x[0])
+    return eventos
+
+def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval):
+    if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
+        return [], [], []
+
     sol_tareas = []
     for (pedido, t_idx), varset in all_vars.items():
         st = solver.Value(varset["start"])
@@ -230,37 +332,36 @@ def extraer_solucion(solver, status, all_vars, intervals, occupied_operators):
             "machine": varset["machine"]
         })
 
+    # Ordenamos las tareas por tiempo de inicio
     sol_tareas.sort(key=lambda x: x["start"])
 
-    # Ocupación de operarios en cada intervalo
-    sol_intervals = []
-    for i, seg in enumerate(intervals):
-        occ_val = solver.Value(occupied_operators[i])
-        real_ini = seg["comp_start"]
-        real_fin = seg["comp_end"]
-        sol_intervals.append({
-            "interval_id": i,
-            "comp_start": real_ini,
-            "comp_end": real_fin,
-            "operarios_ocupados": occ_val
-        })
+    # Construimos la línea de eventos y la ocupación de turnos
+    timeline, turnos_ocupacion = calcular_ocupacion_turnos(sol_tareas, intervals, capacity_per_interval)
 
-    return sol_tareas, sol_intervals
+    return sol_tareas, timeline, turnos_ocupacion
 
-def imprimir_solucion(tareas, intervals):
+
+def imprimir_solucion(tareas, timeline, turnos_ocupacion):
     if not tareas:
         print("No hay solución factible.")
         return
-    makespan = max(x["end"] for x in tareas)
+    makespan = max(t["end"] for t in tareas)
     print(f"\nSOLUCIÓN Factible - Makespan = {makespan}")
     for t in tareas:
-        print(f"Pedido={t['pedido']} t_idx={t['t_idx']}, Maq={t['machine']}, "
-              f"start={t['start']}, end={t['end']}, x_op={t['x_op']} (dur={t['duration']})")
+        print(f" Pedido={t['pedido']} t_idx={t['t_idx']}, "
+              f"Maq={t['machine']}, start={t['start']}, "
+              f"end={t['end']}, x_op={t['x_op']} (dur={t['duration']})")
 
-    print("\nDetalle ocupación de operarios por intervalo comprimido:")
-    for iv in intervals:
-        print(f" Interval {iv['interval_id']} [{iv['comp_start']},{iv['comp_end']}): "
-              f"{iv['operarios_ocupados']} operarios simultáneos")
+    print("\nTimeline de ocupación (cambios de número de operarios):")
+    for evt in timeline:
+        print(f"  t={evt[0]} -> Operarios activos: {evt[2]}")
+
+    print("\nOcupación media por turno:")
+    for turno in turnos_ocupacion:
+        print(f"  Turno={turno['turno_id']} "
+              f"[{turno['comp_start']},{turno['comp_end']}], "
+              f"cap={turno['capacidad']} -> "
+              f"ocupacion_media={turno['ocupacion_media_%']}%")
 
 # ==================================================
 # 5) FUNCIÓN PRINCIPAL
@@ -275,17 +376,17 @@ def planificar(ruta_excel):
     intervals, cap_int = comprimir_calendario(df_calend)
     job_dict, precedences, machine_cap = construir_estructura_tareas(df_tareas, df_capac)
 
-    model, all_vars, occupied_ops = crear_modelo_cp(job_dict,
-                                                    precedences,
-                                                    machine_cap,
-                                                    intervals,
-                                                    cap_int)
+    model, all_vars = crear_modelo_cp(job_dict,
+                                      precedences,
+                                      machine_cap,
+                                      intervals,
+                                      cap_int)
 
     solver, status = resolver_modelo(model)
-    sol_tareas, sol_intervals = extraer_solucion(solver, status, all_vars, intervals, occupied_ops)
+    sol_tareas, timeline, turnos_ocupacion = extraer_solucion(solver, status, all_vars, intervals, cap_int)
 
-    imprimir_solucion(sol_tareas, sol_intervals)
-    return sol_tareas, sol_intervals
+    imprimir_solucion(sol_tareas, timeline, turnos_ocupacion)
+    return sol_tareas, intervals
 
 # ==================================================
 # EJEMPLO DE USO
@@ -294,13 +395,13 @@ if __name__ == "__main__":
     ruta = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
     sol_tareas, sol_intervals = planificar(ruta)
 
-    # Ocupación de operarios
-    fig_operarios = trazar_ocupacion_operarios(sol_intervals)
-    fig_operarios.show()
+    # # Ocupación de operarios
+    # fig_operarios = trazar_ocupacion_operarios(sol_intervals)
+    # fig_operarios.show()
 
-    # Gantt de tareas
-    fig_gantt = generar_diagrama_gantt(sol_tareas)
-    fig_gantt.show()
+    # # Gantt de tareas
+    # fig_gantt = generar_diagrama_gantt(sol_tareas)
+    # fig_gantt.show()
 
     
 
