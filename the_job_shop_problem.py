@@ -155,52 +155,7 @@ def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval)
     # Nuevo timeline detallado
     timeline = construir_timeline_detallado(sol_tareas, intervals, capacity_per_interval)
 
-    # (Opcional) si quieres seguir reportando la ocupación media
-    turnos_ocupacion = [] 
-    for i, seg in enumerate(intervals):
-        # Filtramos los tramos que caen (parcial o totalmente) en este turno
-        cap = capacity_per_interval[i]
-        dur_turno = seg["comp_end"] - seg["comp_start"]
-        if dur_turno <= 0:
-            turnos_ocupacion.append({
-                "turno_id": i,
-                "comp_start": seg["comp_start"],
-                "comp_end": seg["comp_end"],
-                "capacidad": cap,
-                "ocupacion_media_%": 0
-            })
-            continue
-
-        # Sumar "ocupacion * delta_t" en cada subtramo
-        uso_total = 0
-        for tramo in timeline:
-            ti = tramo["t_ini"]
-            tf = tramo["t_fin"]
-            if tf <= seg["comp_start"] or ti >= seg["comp_end"]:
-                continue
-            intersec_ini = max(ti, seg["comp_start"])
-            intersec_fin = min(tf, seg["comp_end"])
-            dur = intersec_fin - intersec_ini
-            uso_total += tramo["ocupacion"] * dur
-
-        if cap > 0:
-            ocup_media = (uso_total / dur_turno) / cap
-        else:
-            ocup_media = 0
-
-        turnos_ocupacion.append({
-            "turno_id": i,
-            "comp_start": seg["comp_start"],
-            "comp_end": seg["comp_end"],
-            "capacidad": cap,
-            "ocupacion_media_%": round(100 * ocup_media, 2)
-        })
-
-    return sol_tareas, timeline, turnos_ocupacion
-
-# ==================================================
-# 5) FUNCIÓN PRINCIPAL
-# ==================================================
+    return sol_tareas, timeline
 
 def planificar(ruta_excel):
     datos = leer_datos(ruta_excel)
@@ -218,13 +173,9 @@ def planificar(ruta_excel):
                                       cap_int)
 
     solver, status = resolver_modelo(model)
-    sol_tareas, timeline, turnos_ocupacion = extraer_solucion(solver, status, all_vars, intervals, cap_int)
+    sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int)
 
-    return sol_tareas, timeline, turnos_ocupacion, df_capac
-
-# ==================================================
-# EJEMPLO DE USO
-# ==================================================
+    return sol_tareas, timeline, df_capac
 
 def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
     """
@@ -302,14 +253,13 @@ if __name__ == "__main__":
     ruta_archivo_base = "archivos/db_dev/Datos_entrada_v10_fechas_relajadas_toy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
-    sol_tareas, timeline, turnos_ocupacion, df_capac = planificar(ruta_archivo_base)
+    sol_tareas, timeline, df_capac = planificar(ruta_archivo_base)
 
     mostrar_resultados(ruta_archivo_base,
                         df_capac,
                         tareas=sol_tareas,
                         timeline=timeline,
-                        turnos_ocupacion=turnos_ocupacion,
-                        imprimir=False,
+                        imprimir=True,
                         exportar=True,
                         output_dir=output_dir,
                         generar_gantt=False,

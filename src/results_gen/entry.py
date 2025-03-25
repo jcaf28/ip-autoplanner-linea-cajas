@@ -10,20 +10,19 @@ def mostrar_resultados( ruta_archivo_base,
                         df_capac,
                         tareas,
                         timeline,
-                        turnos_ocupacion,
                         imprimir=False,
                         exportar=False,
                         output_dir=None,
                         generar_gantt=False,
                         guardar_raw=False):  # <-- Nuevo parámetro
     if imprimir:
-        imprimir_resultados_consola(tareas, timeline, turnos_ocupacion)
+        imprimir_resultados_consola(tareas, timeline)
 
     if exportar and output_dir:
-        exportar_resultados_excel(df_capac, tareas, timeline, turnos_ocupacion, output_dir, open_file_location=False)
+        exportar_resultados_excel(df_capac, tareas, timeline, output_dir, open_file_location=False)
 
     if generar_gantt:
-        generar_diagrama_gantt(tareas, timeline, turnos_ocupacion, df_capac)
+        generar_diagrama_gantt(tareas, timeline, df_capac)
 
     if guardar_raw and output_dir:
-        guardar_resultados_raw(df_capac, tareas, timeline, turnos_ocupacion, output_dir, ruta_archivo_base)
+        guardar_resultados_raw(df_capac, tareas, timeline, output_dir, ruta_archivo_base)

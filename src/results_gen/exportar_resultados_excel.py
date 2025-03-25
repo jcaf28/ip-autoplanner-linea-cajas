@@ -4,12 +4,11 @@ from datetime import datetime
 import platform
 import subprocess
 
-def exportar_resultados_excel(capacidades, tareas, timeline, turnos_ocupacion, output_dir, open_file_location=True):
+def exportar_resultados_excel(capacidades, tareas, timeline, output_dir, open_file_location=True):
     os.makedirs(output_dir, exist_ok=True)
 
     df_tareas = pd.DataFrame(tareas)
     df_timeline = pd.DataFrame(timeline, columns=["t_ini", "t_fin", "ocupacion", "operarios_turno", "%ocup"])
-    df_turnos = pd.DataFrame(turnos_ocupacion)
     df_capacidades = pd.DataFrame(capacidades)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -19,7 +18,6 @@ def exportar_resultados_excel(capacidades, tareas, timeline, turnos_ocupacion, o
     with pd.ExcelWriter(ruta_salida, engine="xlsxwriter") as writer:
         df_tareas.to_excel(writer, sheet_name="Tareas", index=False)
         df_timeline.to_excel(writer, sheet_name="Timeline", index=False)
-        df_turnos.to_excel(writer, sheet_name="Turnos", index=False)
         df_capacidades.to_excel(writer, sheet_name="Capacidades", index=False)
 
     print(f"\n📁 Solución exportada a: {ruta_salida}")
