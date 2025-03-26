@@ -206,7 +206,7 @@ def planificar(ruta_excel):
     return sol_tareas, timeline, df_capac
 
 if __name__ == "__main__":
-    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v13_no_chill_workers_toy.xlsx"
+    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v15_fechas_relajadas.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
     sol_tareas, timeline, df_capac = planificar(ruta_archivo_base)
