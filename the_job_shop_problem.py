@@ -173,15 +173,26 @@ def crear_modelo_cp(job_dict,
 
     return model, all_vars
 
-def resolver_modelo(model):
+def resolver_modelo(model, debug=False):
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 300  # Aumentar si necesitas más calidad
-    solver.parameters.num_search_workers = 8      # Ajusta según tus cores
+    solver.parameters.max_time_in_seconds = 300
+    solver.parameters.num_search_workers = 8
+
+    if debug:
+        print("🛠️ [DEBUG] Resolviendo modelo...")
+    
     status = solver.Solve(model)
+
+    if debug:
+        print("✅ Status:", solver.StatusName(status))
+        print("⏱️ Tiempo (WallTime):", round(solver.WallTime(), 3), "s")
+        print("🔄 Ramas:", solver.NumBranches())
+        print("❌ Conflictos:", solver.NumConflicts())
+        print("📊 Stats:", solver.SolutionInfo())
+
     return solver, status
 
-
-def planificar(ruta_excel):
+def planificar(ruta_excel, debug=False):
     datos = leer_datos(ruta_excel)
     df_tareas   = datos["df_tareas"]
     df_capac    = datos["df_capac"]
@@ -200,7 +211,7 @@ def planificar(ruta_excel):
                                       df_entregas,   # <-- nuevo
                                       df_calend)     # <-- nuevo
 
-    solver, status = resolver_modelo(model)
+    solver, status = resolver_modelo(model, debug)
     sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int, df_calend)
 
     return sol_tareas, timeline, df_capac
@@ -209,7 +220,13 @@ if __name__ == "__main__":
     ruta_archivo_base = "archivos/db_dev/Datos_entrada_v15_fechas_relajadas.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
-    sol_tareas, timeline, df_capac = planificar(ruta_archivo_base)
+    # Nuevo modo de lectura de los datos, construyendo la hoja de TAREAS a partir de TIEMPOS VALIDADOS
+    modo_nuevo = True
+
+    # Mostrar datos sobre procesamiento del modelo
+    modo_debug = True
+
+    sol_tareas, timeline, df_capac = planificar(ruta_archivo_base, modo_debug)
 
     mostrar_resultados(ruta_archivo_base,
                         df_capac,
@@ -219,5 +236,4 @@ if __name__ == "__main__":
                         exportar=True,
                         output_dir=output_dir,
                         generar_gantt=False,
-                        guardar_raw=True,  
-                      )
+                        guardar_raw=True)

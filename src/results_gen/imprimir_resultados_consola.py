@@ -1,3 +1,5 @@
+# PATH: src/results_gen/imprimir_resultados_consola.py
+
 def imprimir_resultados_consola(tareas, timeline):
     if not tareas:
         print("No hay solución factible.")
