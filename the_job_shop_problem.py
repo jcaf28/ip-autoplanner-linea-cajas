@@ -16,8 +16,6 @@ def crear_modelo_cp(job_dict,
                     df_entregas,   
                     df_calend):    
 
-    import datetime
-
     model = cp_model.CpModel()
     all_vars = {}
     horizon = 0
@@ -166,8 +164,12 @@ def crear_modelo_cp(job_dict,
     sum_tardiness = model.NewIntVar(0, 1_000_000_000, "sum_tardiness")
     model.Add(sum_tardiness == cp_model.LinearExpr.Sum(tardiness_vars))
 
+    # Makespan (opcional, como criterio secundario)
+    makespan = model.NewIntVar(0, horizon, "makespan")
+    model.AddMaxEquality(makespan, all_ends)
+
     # Función objetivo combinada
-    model.Minimize(sum_tardiness)
+    model.Minimize(10 * sum_tardiness + makespan)
 
     return model, all_vars
 
