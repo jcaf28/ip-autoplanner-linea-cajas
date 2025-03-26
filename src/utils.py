@@ -285,7 +285,8 @@ def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
 
 def extraer_solucion(solver, status, all_vars, intervals, capacity_per_interval, df_calend):
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-        return [], [], []
+        print("⚠️ No se encontró solución factible u óptima")
+        return [], []
 
     sol_tareas = []
     for (pedido, t_idx), varset in all_vars.items():

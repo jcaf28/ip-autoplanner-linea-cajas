@@ -166,18 +166,14 @@ def crear_modelo_cp(job_dict,
     sum_tardiness = model.NewIntVar(0, 1_000_000_000, "sum_tardiness")
     model.Add(sum_tardiness == cp_model.LinearExpr.Sum(tardiness_vars))
 
-    # Makespan (opcional, como criterio secundario)
-    makespan = model.NewIntVar(0, horizon, "makespan")
-    model.AddMaxEquality(makespan, all_ends)
-
     # Función objetivo combinada
-    model.Minimize(10 * sum_tardiness + makespan)
+    model.Minimize(sum_tardiness)
 
     return model, all_vars
 
 def resolver_modelo(model):
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 60.0  # Aumentar si necesitas más calidad
+    solver.parameters.max_time_in_seconds = 300  # Aumentar si necesitas más calidad
     solver.parameters.num_search_workers = 8      # Ajusta según tus cores
     status = solver.Solve(model)
     return solver, status
@@ -208,7 +204,7 @@ def planificar(ruta_excel):
     return sol_tareas, timeline, df_capac
 
 if __name__ == "__main__":
-    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v13_no_chill_workers_toy.xlsx"
+    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v15_fechas_relajadas.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
     sol_tareas, timeline, df_capac = planificar(ruta_archivo_base)
