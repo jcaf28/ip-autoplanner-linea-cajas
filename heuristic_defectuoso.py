@@ -1,4 +1,4 @@
-# PATH: heuristic.py
+# PATH: heuristic_defectuoso.py
 
 from src.utils import leer_datos, comprimir_calendario, construir_estructura_tareas, comprimir_tiempo, descomprimir_tiempo, construir_timeline_detallado
 from src.results_gen.entry import mostrar_resultados

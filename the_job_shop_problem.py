@@ -175,7 +175,7 @@ def crear_modelo_cp(job_dict,
 
 def resolver_modelo(model, debug=False):
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 300
+    solver.parameters.max_time_in_seconds = 1200
     solver.parameters.num_search_workers = 8
 
     if debug:
@@ -202,28 +202,30 @@ def planificar(ruta_excel, debug=False):
     intervals, cap_int = comprimir_calendario(df_calend)
     job_dict, precedences, machine_cap = construir_estructura_tareas(df_tareas, df_capac)
 
-    # Llamada modificada: pasamos df_entregas y df_calend
+    # 🔍 Filtrar pedidos que estén tanto en TAREAS como en ENTREGAS
+    referencias_validas = set(df_entregas["referencia"])
+    job_dict = {k: v for k, v in job_dict.items() if k in referencias_validas}
+    precedences = {k: v for k, v in precedences.items() if k in referencias_validas}
+
+    # ✅ Crear modelo solo con pedidos válidos
     model, all_vars = crear_modelo_cp(job_dict,
                                       precedences,
                                       machine_cap,
                                       intervals,
                                       cap_int,
-                                      df_entregas,   # <-- nuevo
-                                      df_calend)     # <-- nuevo
+                                      df_entregas,
+                                      df_calend)
 
     solver, status = resolver_modelo(model, debug)
     sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int, df_calend)
 
     return sol_tareas, timeline, df_capac
 
+
 if __name__ == "__main__":
-    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v15_fechas_relajadas.xlsx"
+    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v16_fechas_relajadas_tiempos_reales.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
-    # Nuevo modo de lectura de los datos, construyendo la hoja de TAREAS a partir de TIEMPOS VALIDADOS
-    modo_nuevo = True
-
-    # Mostrar datos sobre procesamiento del modelo
     modo_debug = True
 
     sol_tareas, timeline, df_capac = planificar(ruta_archivo_base, modo_debug)
