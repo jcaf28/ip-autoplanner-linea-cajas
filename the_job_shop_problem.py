@@ -175,7 +175,7 @@ def crear_modelo_cp(job_dict,
 
 def resolver_modelo(model, debug=False):
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 1200
+    solver.parameters.max_time_in_seconds = 100
     solver.parameters.num_search_workers = 8
 
     if debug:
@@ -220,7 +220,6 @@ def planificar(ruta_excel, debug=False):
     sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int, df_calend)
 
     return sol_tareas, timeline, df_capac
-
 
 if __name__ == "__main__":
     ruta_archivo_base = "archivos/db_dev/Datos_entrada_v16_fechas_relajadas_tiempos_reales.xlsx"

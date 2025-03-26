@@ -3,6 +3,8 @@
 import os
 import pickle
 import sys
+import tkinter as tk
+from tkinter import filedialog
 from src.results_gen.generar_diagrama_gantt import generar_diagrama_gantt
 
 def cargar_y_generar_gantt(path_raw):
@@ -42,7 +44,14 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         path_raw = sys.argv[1]
     else:
-        path_raw = buscar_ultimo_pickle_en("archivos/db_dev/output/google-or/raw")
+        root = tk.Tk()
+        root.withdraw()  # Oculta la ventana principal de Tk
+        path_raw = filedialog.askopenfilename(
+            title="Selecciona el archivo .pkl",
+            filetypes=[("Pickle files", "*.pkl")],
+            initialdir="archivos/db_dev/output/google-or/raw"
+    )
+
 
     if path_raw:
         cargar_y_generar_gantt(path_raw)
