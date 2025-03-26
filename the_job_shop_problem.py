@@ -1,6 +1,7 @@
 # PATH: the_job_shop_problem.py
 
 import math
+import pandas as pd
 import collections
 from ortools.sat.python import cp_model
 
@@ -14,7 +15,8 @@ def crear_modelo_cp(job_dict,
                     capacity_per_interval,
                     df_entregas,   
                     df_calend):    
-    
+
+    import datetime
 
     model = cp_model.CpModel()
     all_vars = {}
@@ -127,35 +129,59 @@ def crear_modelo_cp(job_dict,
                 st_var = all_vars[(pedido, t_idx)]["start"]
                 model.Add(st_var >= recep_min)
 
-    # PENALIZACIÓN POR RETRASO DE ENTREGA
+    # PENALIZACIÓN POR RETRASO DE ENTREGA (ponderada)
     tardiness_vars = []
+    all_ends = []
+
+    pesos = {}
+    fecha_min = pd.Timestamp(df_calend["dia"].min())  # <--- AQUÍ EL CAMBIO
+    for pedido in df_entregas["referencia"]:
+        fecha = ent_dict[pedido]["fecha_entrega"]
+        dias_restantes = (fecha - fecha_min).days
+        pesos[pedido] = max(1, 1000 - dias_restantes)
+
     for pedido, tasks in job_dict.items():
+        precs_pedido = precedences.get(pedido, [])
+        indices_con_sucesor = set(idxA for (idxA, idxB) in precs_pedido)
+        indices_finales = [i for i in range(len(tasks)) if i not in indices_con_sucesor]
+        if not indices_finales:
+            indices_finales = list(range(len(tasks)))
+
+        ends_pedido = [all_vars[(pedido, i)]["end"] for i in indices_finales]
         pedido_end_var = model.NewIntVar(0, horizon, f"end_pedido_{pedido}")
-        ends_pedido = [all_vars[(pedido, i)]["end"] for i in range(len(tasks))]
         model.AddMaxEquality(pedido_end_var, ends_pedido)
+
+        all_ends += ends_pedido
 
         due_date = ent_dict[pedido]["fecha_entrega"]
         due_min = comprimir_tiempo(due_date, df_calend)
 
         tardiness = model.NewIntVar(0, 10_000_000, f"tardiness_{pedido}")
         model.Add(tardiness >= pedido_end_var - due_min)
-        tardiness_vars.append(tardiness)
 
-    sum_tardiness = model.NewIntVar(0, 10_000_000, "sum_tardiness")
+        weighted = model.NewIntVar(0, 100_000_000, f"weighted_tardiness_{pedido}")
+        model.AddMultiplicationEquality(weighted, [tardiness, pesos[pedido]])
+        tardiness_vars.append(weighted)
+
+    sum_tardiness = model.NewIntVar(0, 1_000_000_000, "sum_tardiness")
     model.Add(sum_tardiness == cp_model.LinearExpr.Sum(tardiness_vars))
 
-    # OBJETIVO: minimiza makespan + retrasos
-    obj = model.NewIntVar(0, 10_000_000, "obj")
-    model.Add(obj == sum_tardiness)
-    model.Minimize(obj)
+    # Makespan (opcional, como criterio secundario)
+    makespan = model.NewIntVar(0, horizon, "makespan")
+    model.AddMaxEquality(makespan, all_ends)
+
+    # Función objetivo combinada
+    model.Minimize(10 * sum_tardiness + makespan)
 
     return model, all_vars
 
-
 def resolver_modelo(model):
     solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 60.0  # Aumentar si necesitas más calidad
+    solver.parameters.num_search_workers = 8      # Ajusta según tus cores
     status = solver.Solve(model)
     return solver, status
+
 
 def planificar(ruta_excel):
     datos = leer_datos(ruta_excel)
