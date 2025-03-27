@@ -211,7 +211,6 @@ def comprimir_tiempo(dt, df_calend):
     # Si dt es posterior al último turno disponible, devolvemos el acumulado total
     return ultimo_acumulado
 
-
 def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
     """
     Devuelve una lista de diccionarios, cada uno con:
