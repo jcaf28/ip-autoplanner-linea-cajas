@@ -1,12 +1,9 @@
-# PATH: the_job_shop_problem.py
-
+from ortools.sat.python import cp_model
+import collections
 import math
 import pandas as pd
-import collections
-from ortools.sat.python import cp_model
 
-from src.utils import leer_datos, comprimir_calendario, construir_estructura_tareas, extraer_solucion, comprimir_tiempo
-from src.results_gen.entry import mostrar_resultados
+from src.model.time_management import comprimir_tiempo
 
 def crear_modelo_cp(job_dict,
                     precedences,
@@ -173,68 +170,3 @@ def crear_modelo_cp(job_dict,
 
     return model, all_vars
 
-def resolver_modelo(model, debug=False):
-    solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 100
-    solver.parameters.num_search_workers = 8
-
-    if debug:
-        print("🛠️ [DEBUG] Resolviendo modelo...")
-    
-    status = solver.Solve(model)
-
-    if debug:
-        print("✅ Status:", solver.StatusName(status))
-        print("⏱️ Tiempo (WallTime):", round(solver.WallTime(), 3), "s")
-        print("🔄 Ramas:", solver.NumBranches())
-        print("❌ Conflictos:", solver.NumConflicts())
-        print("📊 Stats:", solver.SolutionInfo())
-
-    return solver, status
-
-def planificar(ruta_excel, debug=False):
-    datos = leer_datos(ruta_excel)
-    df_tareas   = datos["df_tareas"]
-    df_capac    = datos["df_capac"]
-    df_calend   = datos["df_calend"]
-    df_entregas = datos["df_entregas"]
-
-    intervals, cap_int = comprimir_calendario(df_calend)
-    job_dict, precedences, machine_cap = construir_estructura_tareas(df_tareas, df_capac)
-
-    # 🔍 Filtrar pedidos que estén tanto en TAREAS como en ENTREGAS
-    referencias_validas = set(df_entregas["referencia"])
-    job_dict = {k: v for k, v in job_dict.items() if k in referencias_validas}
-    precedences = {k: v for k, v in precedences.items() if k in referencias_validas}
-
-    # ✅ Crear modelo solo con pedidos válidos
-    model, all_vars = crear_modelo_cp(job_dict,
-                                      precedences,
-                                      machine_cap,
-                                      intervals,
-                                      cap_int,
-                                      df_entregas,
-                                      df_calend)
-
-    solver, status = resolver_modelo(model, debug)
-    sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int, df_calend)
-
-    return sol_tareas, timeline, df_capac
-
-if __name__ == "__main__":
-    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v16_fechas_relajadas_tiempos_reales.xlsx"
-    output_dir = "archivos/db_dev/output/google-or"
-
-    modo_debug = True
-
-    sol_tareas, timeline, df_capac = planificar(ruta_archivo_base, modo_debug)
-
-    mostrar_resultados(ruta_archivo_base,
-                        df_capac,
-                        tareas=sol_tareas,
-                        timeline=timeline,
-                        imprimir=False,
-                        exportar=True,
-                        output_dir=output_dir,
-                        generar_gantt=False,
-                        guardar_raw=True)
