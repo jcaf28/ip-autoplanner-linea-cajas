@@ -200,33 +200,71 @@ def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
 
 def calcular_dias_laborables(ts_inicio, ts_fin, df_calend):
     """
-    Dado dos timestamps (ts_inicio y ts_fin) y el df_calend
-    que contiene los días laborales (una fila por turno/día),
-    devuelve cuántos días laborales hay en ese intervalo.
-    
-    - En este ejemplo se hace un conteo por "día" (sin afinar horas).
-    - Ajusta o sustituye la lógica si requieres mayor precisión 
-      o un cómputo diferente.
+    Devuelve el número decimal de días laborables entre dos timestamps, según df_calend.
+
+    Cada día laborable tiene una contribución proporcional a sus horas trabajadas,
+    y se normaliza dividiendo entre el promedio de horas laborables por día natural.
     """
 
     if ts_inicio > ts_fin:
-        return 0  # por si viene invertido, evitar negativos
-    
-    # Obtenemos solo las fechas (sin hora) dentro de df_calend
-    # que son días laborables (asumimos que si aparecen en df_calend es laborable).
-    df_calend_days = df_calend["dia"].unique()
-    dias_laborables = set(df_calend_days)
+        return 0.0
 
-    # Convertimos a date para comparar solo días
-    d_ini = ts_inicio.date()
-    d_fin = ts_fin.date()
+    df_calend = df_calend.copy()
+    df_calend["dia"] = pd.to_datetime(df_calend["dia"]).dt.date
+    df_calend["hora_inicio"] = pd.to_datetime(df_calend["hora_inicio"], format="%H:%M:%S").dt.time
+    df_calend["hora_fin"]    = pd.to_datetime(df_calend["hora_fin"],    format="%H:%M:%S").dt.time
 
-    # Avanzamos día a día y contamos cuántos están en el set de laborables
-    delta = (d_fin - d_ini).days
-    cuenta = 0
-    for i in range(delta+1):
-        d_actual = d_ini + timedelta(days=i)
-        if d_actual in dias_laborables:
-            cuenta += 1
+    total_seg_laborales = 0
 
-    return cuenta
+    for _, row in df_calend.iterrows():
+        dia = row["dia"]
+        h_ini = datetime.combine(dia, row["hora_inicio"])
+        h_fin = datetime.combine(dia, row["hora_fin"])
+
+        # Si el turno está completamente fuera del rango, lo saltamos
+        if h_fin <= ts_inicio or h_ini >= ts_fin:
+            continue
+
+        # Calculamos la intersección entre el turno y el intervalo
+        tramo_ini = max(ts_inicio, h_ini)
+        tramo_fin = min(ts_fin, h_fin)
+
+        if tramo_fin > tramo_ini:
+            total_seg_laborales += (tramo_fin - tramo_ini).total_seconds()
+
+    # Horas laborables promedio por día (usamos función que ya tienes)
+    horas_por_dia = calcular_promedio_horas_laborables_por_dia(df_calend)
+    if horas_por_dia == 0:
+        return 0.0
+
+    segundos_por_dia = horas_por_dia * 3600
+
+    dias_laborales_decimal = total_seg_laborales / segundos_por_dia
+
+    return round(dias_laborales_decimal, 2)
+
+
+def calcular_promedio_horas_laborables_por_dia(df_calend):
+    """
+    Calcula cuántas horas laborables hay en promedio por día natural (según df_calend).
+    """
+    dfc = df_calend.copy()
+    dfc["dia"] = pd.to_datetime(dfc["dia"]).dt.date
+    # Duración de cada turno en horas
+    dfc["hora_inicio"] = pd.to_datetime(dfc["hora_inicio"], format="%H:%M:%S").dt.time
+    dfc["hora_fin"]    = pd.to_datetime(dfc["hora_fin"],    format="%H:%M:%S").dt.time
+
+    dfc["horas"] = dfc.apply(
+        lambda row: (datetime.combine(row["dia"], row["hora_fin"]) - 
+                      datetime.combine(row["dia"], row["hora_inicio"])).total_seconds() / 3600,
+        axis=1
+    )
+
+    horas_por_dia = dfc.groupby("dia")["horas"].sum()
+    total_horas = horas_por_dia.sum()
+    ndias = len(horas_por_dia)
+
+    if ndias == 0:
+        return 0.0
+
+    return round(total_horas / ndias, 2)

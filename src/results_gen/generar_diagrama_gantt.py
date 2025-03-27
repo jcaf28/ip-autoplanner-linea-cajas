@@ -68,6 +68,16 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
     y_map = {l: i for i, l in enumerate(y_labels)}
 
     for t in tareas:
+        # Chequeamos si es retraso o adelanto
+        delta = t.get("delta_entrega_dias_laborales", 0)
+        # p.ej. +3 => Retraso de 3, -2 => Adelanto de 2
+        if delta < 0:
+            diff_text = f"✅ Adelanto: {abs(delta):.2f} días"
+        elif delta > 0:
+            diff_text = f"⚠️ Retraso: {delta:.2f} días"
+        else:
+            diff_text = f"= Sin retraso"
+
         hover_txt = (
             f"🧾 Pedido: {t['pedido']}<br>"
             f"🏭 Máquina: {t['machine']}<br>"
@@ -76,8 +86,8 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
             f"⏱️ Duración: {t['duration']} min<br>"
             f"📅 Entrega requerida: {t['fecha_entrega_requerida']}<br>"
             f"📅 Entrega estimada: {t['fecha_entrega_estimada']}<br>"
-            f"⚠️ Retraso (días lab.): {t['retraso_dias_laborales']}<br>"
-            f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']}"
+            f"{diff_text}<br>"
+            f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']:.2f}"
         )
         fig.add_trace(go.Bar(
             x=[t["duration"]],
@@ -138,6 +148,7 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
         resumen_metr, _ = resumen_pedidos
         texto_metricas = (
             f"📈 <b>Métricas globales</b><br>"
+            f"• 🕓 Horas/día laborable: {resumen_metr['horas_laborables_por_dia']:.2f}<br>"
             f"• ⏱️ Lead time medio: {resumen_metr['leadtime_medio_dias']:.2f} días<br>"
             f"• ⚠️ Retraso medio: {resumen_metr['retraso_medio_dias']:.2f} días<br>"
             f"• 📦 Días entre entregas: {resumen_metr['dias_entre_entregas_prom']:.2f} días"
