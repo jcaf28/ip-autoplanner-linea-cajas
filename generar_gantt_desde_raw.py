@@ -2,14 +2,12 @@
 
 import os
 import pickle
-import sys
 import tkinter as tk
 from tkinter import filedialog
 
 from src.results_gen.generar_diagrama_gantt import generar_diagrama_gantt
-from src.results_gen.deprecated.generar_diagrama_gantt_deprecated import generar_diagrama_gantt_deprecated
 
-def cargar_y_generar_gantt(path_raw, usar_deprecated=False):
+def cargar_y_generar_gantt(path_raw):
     if not os.path.isfile(path_raw):
         print(f"❌ No se encontró el archivo: {path_raw}")
         return
@@ -28,11 +26,7 @@ def cargar_y_generar_gantt(path_raw, usar_deprecated=False):
     print(f"   • capacidades: {len(capacidades)} ubicaciones")
 
     print("\n📊 Generando diagrama de Gantt...\n")
-    if usar_deprecated:
-        print("⚠️ Modo DEPRECATED activado")
-        generar_diagrama_gantt_deprecated(tareas, timeline, capacidades)
-    else:
-        generar_diagrama_gantt(tareas, timeline, capacidades, resumen_pedidos)
+    generar_diagrama_gantt(tareas, timeline, capacidades, resumen_pedidos)
 
 def buscar_ultimo_pickle_en(directorio):
     if not os.path.isdir(directorio):
@@ -48,21 +42,13 @@ def buscar_ultimo_pickle_en(directorio):
     return os.path.join(directorio, archivos[0])
 
 if __name__ == "__main__":
-    print("\n🔍 ¿Quieres usar la versión DEPRECATED del Gantt?")
-    print("    Pulsa 'd' y ENTER para usarla. Pulsa cualquier otra tecla y ENTER para continuar con la versión nueva.")
-    eleccion = input("👉 ")
-    usar_deprecated = eleccion.strip().lower() == "d"
-
-    if len(sys.argv) > 1:
-        path_raw = sys.argv[1]
-    else:
-        root = tk.Tk()
-        root.withdraw()
-        path_raw = filedialog.askopenfilename(
-            title="Selecciona el archivo .pkl",
-            filetypes=[("Pickle files", "*.pkl")],
-            initialdir="archivos/db_dev/output/google-or/raw"
-        )
+    root = tk.Tk()
+    root.withdraw()
+    path_raw = filedialog.askopenfilename(
+        title="Selecciona el archivo .pkl",
+        filetypes=[("Pickle files", "*.pkl")],
+        initialdir="archivos/db_dev/output/google-or/raw"
+    )
 
     if path_raw:
-        cargar_y_generar_gantt(path_raw, usar_deprecated=usar_deprecated)
+        cargar_y_generar_gantt(path_raw)

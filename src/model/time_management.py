@@ -4,6 +4,11 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 def comprimir_calendario(df_calend):
+    """
+    Ordena los turnos de df_calend, calcula su duración en minutos
+    y crea una lista 'intervals' con sus comp_start y comp_end acumulados.
+    Si un turno cruza la medianoche, suma un día a dt_fin.
+    """
     df_calend = df_calend.copy()
     df_calend = df_calend.sort_values(by=["dia", "hora_inicio"])
     intervals = []
@@ -24,7 +29,7 @@ def comprimir_calendario(df_calend):
         dt_ini = datetime(dia.year, dia.month, dia.day, hi.hour, hi.minute, hi.second)
         dt_fin = datetime(dia.year, dia.month, dia.day, hf.hour, hf.minute, hf.second)
 
-        # ⚠️ Si el turno cruza la medianoche
+        # Turno cruza medianoche
         if dt_fin <= dt_ini:
             dt_fin += timedelta(days=1)
 
@@ -35,6 +40,7 @@ def comprimir_calendario(df_calend):
 
         comp_start = acumulado
         comp_end = acumulado + dur_min
+
         intervals.append({
             "dt_inicio": dt_ini,
             "dt_fin": dt_fin,
@@ -46,91 +52,109 @@ def comprimir_calendario(df_calend):
 
     return intervals, capacity_per_interval
 
+
 def descomprimir_tiempo(t, df_calend, modo="ini"):
     """
-    Convierte un minuto acumulado `t` a un timestamp.
-    - modo="ini": descompresión de inicio -> se asocia al inicio del turno donde cae t
-    - modo="fin": descompresión de fin -> si t cae justo al final de un turno, se asocia a ese final
+    Convierte un minuto acumulado `t` en un timestamp, según df_calend.
+    - modo="ini": se asocia al inicio del turno donde cae t
+    - modo="fin": se asocia al final del turno donde cae t
+    Devuelve None y lanza un warning si t queda fuera.
     """
     df_calend = df_calend.copy()
-
+    df_calend["dia"] = pd.to_datetime(df_calend["dia"]).dt.date
     df_calend["hora_inicio"] = pd.to_datetime(df_calend["hora_inicio"], format="%H:%M:%S").dt.time
     df_calend["hora_fin"]    = pd.to_datetime(df_calend["hora_fin"],    format="%H:%M:%S").dt.time
-
-    df_calend["dur_min"] = [
-        (datetime.combine(row["dia"], row["hora_fin"]) - datetime.combine(row["dia"], row["hora_inicio"])).total_seconds() / 60
-        for _, row in df_calend.iterrows()
-    ]
-    df_calend["dur_min"] = df_calend["dur_min"].astype(int)
 
     df_calend = df_calend.sort_values(by=["dia", "hora_inicio"]).reset_index(drop=True)
 
     acumulado = 0
     for _, row in df_calend.iterrows():
-        dur = row["dur_min"]
+        dia = row["dia"]
+        hi = row["hora_inicio"]
+        hf = row["hora_fin"]
+
+        dt_ini = datetime.combine(dia, hi)
+        dt_fin = datetime.combine(dia, hf)
+
+        # Turno cruza medianoche
+        if dt_fin <= dt_ini:
+            dt_fin += timedelta(days=1)
+
+        dur_min = int((dt_fin - dt_ini).total_seconds() / 60)
         comp_start = acumulado
-        comp_end = acumulado + dur
+        comp_end = acumulado + dur_min
 
         if modo == "ini" and comp_start <= t < comp_end:
             delta = t - comp_start
-            base_dt = datetime.combine(row["dia"], row["hora_inicio"])
-            return base_dt + timedelta(minutes=int(delta))
+            return dt_ini + timedelta(minutes=delta)
 
         elif modo == "fin" and comp_start < t <= comp_end:
             delta = t - comp_start
-            base_dt = datetime.combine(row["dia"], row["hora_inicio"])
-            return base_dt + timedelta(minutes=int(delta))
+            return dt_ini + timedelta(minutes=delta)
 
         acumulado = comp_end
 
-    return None  # fuera de calendario
+    print(f"⚠️ [WARNING] Tiempo {t} fuera del calendario definido. No se puede descomprimir.")
+    return None
+
 
 def comprimir_tiempo(dt, df_calend):
     """
-    Convierte una fecha/hora dt (datetime) al número de minutos acumulados
-    según la estructura de turnos de df_calend.
-    Si dt cae antes del primer turno, devuelve 0.
-    Si dt cae después del último turno, devuelve el total de minutos acumulados de toda la calendarización.
-    Si cae en medio, suma los turnos enteros previos y añade la parte proporcional del turno en el que cae.
+    Convierte una fecha/hora dt a un número de minutos acumulados en df_calend.
+    Si dt cae antes del primer turno => 0.
+    Si dt cae entre turnos => sumamos la parte previa más la parte parcial del turno.
+    Si dt está después del último turno => el total acumulado.
+    
+    Nota: Si el turno cruza medianoche, habría que duplicar la misma lógica
+    que en comprimir_calendario (sumar 1 día). 
+    Si no, se asume que no hay problemas o ya se corrigió en df_calend.
     """
     dfc = df_calend.copy()
-    # Aseguramos que las columnas 'dia', 'hora_inicio' y 'hora_fin' estén como datetime/time
     dfc["dia"] = pd.to_datetime(dfc["dia"]).dt.date
-
-    # Convertimos hora_inicio y hora_fin a tipo datetime.time si no lo están
     dfc["hora_inicio"] = pd.to_datetime(dfc["hora_inicio"], format="%H:%M:%S").dt.time
     dfc["hora_fin"]    = pd.to_datetime(dfc["hora_fin"],    format="%H:%M:%S").dt.time
 
-    # Calculamos la duración en minutos de cada turno
     dfc = dfc.sort_values(by=["dia", "hora_inicio"]).reset_index(drop=True)
-    dfc["dur_min"] = [
-        (datetime.combine(row["dia"], row["hora_fin"]) - datetime.combine(row["dia"], row["hora_inicio"])).total_seconds()/60
-        for _, row in dfc.iterrows()
-    ]
-    dfc["dur_min"] = dfc["dur_min"].astype(int)
 
+    # Calculamos dur_min ajustando cruces de medianoche
+    # Similar a comprimir_calendario
+    turnos = []
     acumulado = 0
-    ultimo_acumulado = 0
     for _, row in dfc.iterrows():
-        dt_inicio_turno = datetime.combine(row["dia"], row["hora_inicio"])
-        dt_fin_turno    = datetime.combine(row["dia"], row["hora_fin"])
-        dur_minutos     = row["dur_min"]
+        dia = row["dia"]
+        hi = row["hora_inicio"]
+        hf = row["hora_fin"]
 
-        # Si dt está antes de este turno, devolvemos el acumulado sin contar este turno.
-        if dt < dt_inicio_turno:
-            return acumulado
+        dt_ini = datetime.combine(dia, hi)
+        dt_fin = datetime.combine(dia, hf)
+        if dt_fin <= dt_ini:
+            dt_fin += timedelta(days=1)
 
-        # Si dt está dentro de este turno, añadimos la parte parcial
-        if dt_inicio_turno <= dt < dt_fin_turno:
-            delta = (dt - dt_inicio_turno).total_seconds()/60
-            return int(acumulado + round(delta))
+        dur_min = int((dt_fin - dt_ini).total_seconds() / 60)
+        turnos.append((dt_ini, dt_fin, acumulado, acumulado + dur_min))
+        acumulado += dur_min
 
-        # Si dt está más allá de este turno, sumamos todo el turno y seguimos
-        acumulado += dur_minutos
-        ultimo_acumulado = acumulado
+    # Recorremos la lista 'turnos' para ubicar dt
+    if not turnos:
+        return 0
 
-    # Si dt es posterior al último turno disponible, devolvemos el acumulado total
-    return ultimo_acumulado
+    # Si dt es antes del primer turno
+    if dt < turnos[0][0]:
+        return 0
+
+    # Vamos iterando
+    for (t_ini, t_fin, comp_start, comp_end) in turnos:
+        if dt < t_ini:
+            # Aún no llegamos a este turno
+            return comp_start
+        if t_ini <= dt < t_fin:
+            # Estamos dentro del turno
+            delta = (dt - t_ini).total_seconds() / 60
+            return int(round(comp_start + delta))
+
+    # Si dt es posterior al último turno
+    return turnos[-1][3]
+
 
 def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
     """
@@ -146,36 +170,31 @@ def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
         return -1
 
     # 1) Generar eventos: +x_op en start, -x_op en end
-    #    + también añadimos los límites de turnos con delta_op=0
     eventos = []
     for tarea in tareas:
         xop = tarea["x_op"]
         if xop > 0:
             eventos.append((tarea["start"], +xop))
             eventos.append((tarea["end"],   -xop))
+
+    # Añadimos los límites de turnos con delta_op=0
     for i, seg in enumerate(intervals):
         eventos.append((seg["comp_start"], 0))
         eventos.append((seg["comp_end"],   0))
 
-    # 2) Ordenar eventos: primero por tiempo, si empatan
-    #    primero las entradas (+) y después las salidas (-)
+    # 2) Ordenar eventos: por tiempo, si empatan, primero entradas (+), luego salidas (-)
     eventos.sort(key=lambda e: (e[0], -e[1]))
 
-    # 3) Recorremos eventos para crear tramos [tiempo_i, tiempo_(i+1))
-    #    y en cada tramo calculamos la ocupación (acumulada) y
-    #    partimos dicho tramo según los límites de los turnos.
+    # 3) Recorremos para crear tramos [ti, ti+1) con su ocupación
     timeline = []
     ocupacion_actual = 0
 
     for i in range(len(eventos) - 1):
         t0, delta_op = eventos[i]
-        # Actualizar ocupacion con el evento actual
         ocupacion_actual += delta_op
-
         t1 = eventos[i + 1][0]
+
         if t1 > t0:
-            # Recorremos este rango [t0, t1) y lo partimos
-            # si cruza varios turnos
             t_ini_segmento = t0
             while t_ini_segmento < t1:
                 idx_turno = turno_idx_de_tiempo(t_ini_segmento)
@@ -186,31 +205,29 @@ def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
                 t_fin_segmento = min(fin_turno, t1)
                 cap_turno = capacity_per_interval[idx_turno]
 
+                porc_ocup = 0
                 if cap_turno > 0:
-                    p_ocup = round(100 * ocupacion_actual / cap_turno, 2)
-                else:
-                    p_ocup = 0
+                    porc_ocup = round(100 * ocupacion_actual / cap_turno, 2)
 
                 timeline.append({
                     "t_ini": t_ini_segmento,
                     "t_fin": t_fin_segmento,
                     "ocupacion": ocupacion_actual,
                     "operarios_turno": cap_turno,
-                    "%ocup": p_ocup
+                    "%ocup": porc_ocup
                 })
 
                 t_ini_segmento = t_fin_segmento
 
     return timeline
 
+
 def calcular_dias_laborables(ts_inicio, ts_fin, df_calend):
     """
-    Devuelve el número decimal de días laborables entre dos timestamps, según df_calend.
-
-    Cada día laborable tiene una contribución proporcional a sus horas trabajadas,
-    y se normaliza dividiendo entre el promedio de horas laborables por día natural.
+    Devuelve el número decimal de días laborables entre dos timestamps, considerando turnos nocturnos.
+    Cada día laborable se mide como su intersección con [ts_inicio, ts_fin],
+    dividido por la media de horas/día (en segundos) => días decimales.
     """
-
     if ts_inicio > ts_fin:
         return 0.0
 
@@ -223,52 +240,67 @@ def calcular_dias_laborables(ts_inicio, ts_fin, df_calend):
 
     for _, row in df_calend.iterrows():
         dia = row["dia"]
-        h_ini = datetime.combine(dia, row["hora_inicio"])
-        h_fin = datetime.combine(dia, row["hora_fin"])
+        dt_ini = datetime.combine(dia, row["hora_inicio"])
+        dt_fin = datetime.combine(dia, row["hora_fin"])
 
-        # Si el turno está completamente fuera del rango, lo saltamos
-        if h_fin <= ts_inicio or h_ini >= ts_fin:
+        # Turno nocturno
+        if dt_fin <= dt_ini:
+            dt_fin += timedelta(days=1)
+
+        # Si el turno está totalmente fuera del rango, lo saltamos
+        if dt_fin <= ts_inicio or dt_ini >= ts_fin:
             continue
 
-        # Calculamos la intersección entre el turno y el intervalo
-        tramo_ini = max(ts_inicio, h_ini)
-        tramo_fin = min(ts_fin, h_fin)
-
+        # Intersección real
+        tramo_ini = max(ts_inicio, dt_ini)
+        tramo_fin = min(ts_fin, dt_fin)
         if tramo_fin > tramo_ini:
             total_seg_laborales += (tramo_fin - tramo_ini).total_seconds()
 
-    # Horas laborables promedio por día (usamos función que ya tienes)
     horas_por_dia = calcular_promedio_horas_laborables_por_dia(df_calend)
     if horas_por_dia == 0:
         return 0.0
 
-    segundos_por_dia = horas_por_dia * 3600
-
-    dias_laborales_decimal = total_seg_laborales / segundos_por_dia
-
-    return round(dias_laborales_decimal, 2)
+    seg_por_dia = horas_por_dia * 3600
+    return round(total_seg_laborales / seg_por_dia, 2)
 
 
 def calcular_promedio_horas_laborables_por_dia(df_calend):
     """
     Calcula cuántas horas laborables hay en promedio por día natural (según df_calend).
+    Soporta turnos nocturnos (si dt_fin < dt_ini => +1 día).
     """
     dfc = df_calend.copy()
     dfc["dia"] = pd.to_datetime(dfc["dia"]).dt.date
-    # Duración de cada turno en horas
     dfc["hora_inicio"] = pd.to_datetime(dfc["hora_inicio"], format="%H:%M:%S").dt.time
     dfc["hora_fin"]    = pd.to_datetime(dfc["hora_fin"],    format="%H:%M:%S").dt.time
 
-    dfc["horas"] = dfc.apply(
-        lambda row: (datetime.combine(row["dia"], row["hora_fin"]) - 
-                      datetime.combine(row["dia"], row["hora_inicio"])).total_seconds() / 3600,
-        axis=1
-    )
+    # Sumamos horas reales por día
+    # Si hf <= hi => cruza medianoche => sumamos 1 día
+    rows = []
+    for _, row in dfc.iterrows():
+        dia = row["dia"]
+        hi = datetime.combine(dia, row["hora_inicio"])
+        hf = datetime.combine(dia, row["hora_fin"])
+        if hf <= hi:
+            hf += timedelta(days=1)
 
-    horas_por_dia = dfc.groupby("dia")["horas"].sum()
+        dur_h = (hf - hi).total_seconds() / 3600
+        rows.append((dia, dur_h))
+
+    # rows puede contener un day X y un turno que termina al día siguiente
+    # => si quieres que cuente para day+1, necesitaríamos otra partición,
+    #   pero asumimos que se acumula al day principal.
+    #   Si no, habría que trocear turnos. 
+    #   Depende de tu preferencia. 
+    #   Por ahora sumamos entero al day => la media puede quedar un poco sesgada.
+
+    df_temp = pd.DataFrame(rows, columns=["dia", "horas"])
+    # Agrupamos por 'dia'
+    horas_por_dia = df_temp.groupby("dia")["horas"].sum()
+
     total_horas = horas_por_dia.sum()
     ndias = len(horas_por_dia)
-
     if ndias == 0:
         return 0.0
 

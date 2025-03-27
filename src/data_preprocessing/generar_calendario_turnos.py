@@ -40,7 +40,7 @@ def generar_calendario_formateado(ruta_excel, hoja="CALENDARIO_SIN_FORMATO", deb
 
         for t in turnos:
             registros.append({
-                "dia": dia,
+                "dia": dia.strftime("%d/%m/%Y"),  # <-- aquí el cambio de formato
                 "turno": t[0],
                 "hora_inicio": t[1],
                 "hora_fin": t[2],
