@@ -11,7 +11,8 @@ def seleccionar_archivo_excel():
     Tk().withdraw()
     ruta = filedialog.askopenfilename(
         title="Selecciona archivo Excel de entrada",
-        filetypes=[("Archivos Excel", "*.xlsx *.xls")]
+        filetypes=[("Archivos Excel", "*.xlsx *.xls")],
+        initialdir="archivos/db_dev"
     )
     return ruta
 
