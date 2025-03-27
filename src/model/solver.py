@@ -1,9 +1,6 @@
 # PATH: src/model/solver.py
 
 from ortools.sat.python import cp_model
-import pickle
-import os
-from datetime import datetime
 
 from src.model.model import crear_modelo_cp
 from src.model.time_management import comprimir_calendario
@@ -34,16 +31,12 @@ def planificar_linea_produccion(ruta_excel, debug=False):
 
     solver, status = resolver_modelo(model, debug)
 
-    if debug:
-        guardar_resultado_solver_intermedio(
-            ruta_excel, solver, status, all_vars, intervals, cap_int, df_calend, df_entregas
-        )
-
     sol_tareas, timeline, resumen_pedidos = extraer_solucion(
         solver, status, all_vars, intervals, cap_int, df_calend, df_entregas
     )
 
     return sol_tareas, timeline, df_capac, resumen_pedidos
+
 def resolver_modelo(model, debug=False):
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 1800
@@ -62,29 +55,3 @@ def resolver_modelo(model, debug=False):
         print("📊 Stats:", solver.SolutionInfo())
 
     return solver, status
-
-def guardar_resultado_solver_intermedio(ruta_excel, solver, status, all_vars, intervals, cap_int, df_calend, df_entregas):
-    """
-    Guarda el estado del solver y los datos necesarios para el postprocesado.
-    Útil para evitar tener que volver a ejecutar el modelo en fase de desarrollo.
-    """
-    intermedios_dir = "archivos/debug/intermedios_solver"
-    os.makedirs(intermedios_dir, exist_ok=True)
-
-    nombre_base = os.path.splitext(os.path.basename(ruta_excel))[0]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path_out = os.path.join(intermedios_dir, f"{nombre_base}_{timestamp}_raw_solver.pkl")
-
-    with open(path_out, "wb") as f:
-        pickle.dump({
-            "solver": solver,
-            "status": status,
-            "all_vars": all_vars,
-            "intervals": intervals,
-            "capacity_per_interval": cap_int,
-            "df_calend": df_calend,
-            "df_entregas": df_entregas
-        }, f)
-
-    print(f"💾 Resultados intermedios guardados en: {path_out}")
-    return path_out

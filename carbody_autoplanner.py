@@ -4,7 +4,7 @@ from src.model.solver import planificar_linea_produccion
 from src.results_gen.entry import mostrar_resultados
 
 if __name__ == "__main__":
-    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v16_fechas_relajadas_tiempos_reales.xlsx"
+    ruta_archivo_base = "archivos/db_dev/Datos_entrada_v16_fechas_relajadas_tiempos_reales_toy.xlsx"
     output_dir = "archivos/db_dev/output/google-or"
 
     modo_debug = True

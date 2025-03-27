@@ -2,6 +2,7 @@
 
 import pandas as pd
 from ortools.sat.python import cp_model
+import datetime
 from src.model.time_management import ( descomprimir_tiempo, 
                                         construir_timeline_detallado, 
                                         calcular_dias_laborables,
@@ -53,6 +54,11 @@ def extraer_solucion( solver,
         "fecha_recepcion_materiales": "fecha_mat"
     })
 
+    ############################################
+    # 1) Convertir las columnas del df_ent a Timestamp
+    df_ent["fecha_entrega_req"] = pd.to_datetime(df_ent["fecha_entrega_req"], errors="coerce")
+    df_ent["fecha_mat"]         = pd.to_datetime(df_ent["fecha_mat"],         errors="coerce")
+
     info_pedidos = {}
     pedidos_en_sol = set([t["pedido"] for t in sol_tareas])
     for ped in pedidos_en_sol:
@@ -67,26 +73,36 @@ def extraer_solucion( solver,
     for _, row in df_ent.iterrows():
         ped = row["pedido"]
         if ped in info_pedidos:
-            info_pedidos[ped]["fecha_requerida"]  = row["fecha_entrega_req"]
-            info_pedidos[ped]["fecha_materiales"] = row["fecha_mat"]
+            info_pedidos[ped]["fecha_requerida"]  = row["fecha_entrega_req"]  # Timestamp (o NaT)
+            info_pedidos[ped]["fecha_materiales"] = row["fecha_mat"]          # Timestamp (o NaT)
 
+    ############################################
+    # 2) Armar max_fin_by_pedido
     from collections import defaultdict
     max_fin_by_pedido = defaultdict(lambda: None)
     for t in sol_tareas:
         p = t["pedido"]
         tsf = t["timestamp_fin"]
+        # Si tsf es un datetime.datetime en vez de pd.Timestamp => convertir
+        if isinstance(tsf, datetime.datetime) and not isinstance(tsf, pd.Timestamp):
+            tsf = pd.Timestamp(tsf)
+            t["timestamp_fin"] = tsf
+
         if tsf is not None:
             if max_fin_by_pedido[p] is None or tsf > max_fin_by_pedido[p]:
                 max_fin_by_pedido[p] = tsf
 
+    ############################################
+    # 3) Calcular retraso/adelanto y lead time
     for ped in info_pedidos:
         fin = max_fin_by_pedido.get(ped)
         info_pedidos[ped]["fecha_final"] = fin
 
-        fecha_req = info_pedidos[ped].get("fecha_requerida")
-        fecha_mat = info_pedidos[ped].get("fecha_materiales")
+        fecha_req = info_pedidos[ped].get("fecha_requerida")   # pd.Timestamp o NaT
+        fecha_mat = info_pedidos[ped].get("fecha_materiales")  # pd.Timestamp o NaT
 
-        if isinstance(fecha_req, pd.Timestamp) and isinstance(fin, pd.Timestamp):
+        if pd.notnull(fecha_req) and pd.notnull(fin):
+            # fin < req => adelanto, fin > req => retraso
             if fin < fecha_req:
                 dias_laborales = calcular_dias_laborables(fin, fecha_req, df_calend)
                 dias_diff = dias_laborales[0] if isinstance(dias_laborales, tuple) else dias_laborales
@@ -96,20 +112,21 @@ def extraer_solucion( solver,
                 dias_diff = dias_laborales[0] if isinstance(dias_laborales, tuple) else dias_laborales
                 info_pedidos[ped]["delta_entrega_laboral"] = round(dias_diff, 2)
 
-        if isinstance(fecha_mat, pd.Timestamp) and isinstance(fin, pd.Timestamp):
+        if pd.notnull(fecha_mat) and pd.notnull(fin):
             lt_val = calcular_dias_laborables(fecha_mat, fin, df_calend)
             if isinstance(lt_val, tuple):
                 lt_val = lt_val[0]
             info_pedidos[ped]["leadtime_laboral"] = round(lt_val, 2)
 
+    ############################################
+    # 4) Inyectar estos datos en sol_tareas
     for t in sol_tareas:
         ped = t["pedido"]
         info = info_pedidos[ped]
-        t["fecha_entrega_requerida"]     = info["fecha_requerida"]
-        t["fecha_entrega_estimada"]      = info["fecha_final"]
-        t["delta_entrega_dias_laborales"] = info["delta_entrega_laboral"]
-        t["leadtime_dias_laborales"]     = info["leadtime_laboral"]
-
+        t["fecha_entrega_requerida"]       = info["fecha_requerida"]
+        t["fecha_entrega_estimada"]        = info["fecha_final"]
+        t["delta_entrega_dias_laborales"]  = info["delta_entrega_laboral"]
+        t["leadtime_dias_laborales"]       = info["leadtime_laboral"]
     retrasos = []
     leadtimes = []
     fechas_fin = []
