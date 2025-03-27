@@ -23,6 +23,11 @@ def comprimir_calendario(df_calend):
 
         dt_ini = datetime(dia.year, dia.month, dia.day, hi.hour, hi.minute, hi.second)
         dt_fin = datetime(dia.year, dia.month, dia.day, hf.hour, hf.minute, hf.second)
+
+        # ⚠️ Si el turno cruza la medianoche
+        if dt_fin <= dt_ini:
+            dt_fin += timedelta(days=1)
+
         dur_secs = (dt_fin - dt_ini).total_seconds()
         dur_min = int(round(dur_secs / 60.0))
         if dur_min <= 0:
