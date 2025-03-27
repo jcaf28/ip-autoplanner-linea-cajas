@@ -39,7 +39,7 @@ def planificar_linea_produccion(ruta_excel, debug=False):
 
 def resolver_modelo(model, debug=False):
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 1800
+    solver.parameters.max_time_in_seconds = 1200
     solver.parameters.num_search_workers = 8
 
     if debug:
