@@ -1,4 +1,4 @@
-# PATH: src/results_gen/generar_diagrama_gantt.py
+# PATH: src/results_gen/deprecated/generar_diagrama_gantt_deprecated.py
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots

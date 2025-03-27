@@ -17,12 +17,10 @@ def planificar_linea_produccion(ruta_excel, debug=False):
     intervals, cap_int = comprimir_calendario(df_calend)
     job_dict, precedences, machine_cap = construir_estructura_tareas(df_tareas, df_capac)
 
-    # 🔍 Filtrar pedidos que estén tanto en TAREAS como en ENTREGAS
     referencias_validas = set(df_entregas["referencia"])
     job_dict = {k: v for k, v in job_dict.items() if k in referencias_validas}
     precedences = {k: v for k, v in precedences.items() if k in referencias_validas}
 
-    # ✅ Crear modelo solo con pedidos válidos
     model, all_vars = crear_modelo_cp(job_dict,
                                       precedences,
                                       machine_cap,
@@ -32,9 +30,11 @@ def planificar_linea_produccion(ruta_excel, debug=False):
                                       df_calend)
 
     solver, status = resolver_modelo(model, debug)
-    sol_tareas, timeline = extraer_solucion(solver, status, all_vars, intervals, cap_int, df_calend)
+    sol_tareas, timeline, resumen_pedidos = extraer_solucion(
+        solver, status, all_vars, intervals, cap_int, df_calend, df_entregas
+    )
 
-    return sol_tareas, timeline, df_capac
+    return sol_tareas, timeline, df_capac, resumen_pedidos
 
 def resolver_modelo(model, debug=False):
     solver = cp_model.CpSolver()

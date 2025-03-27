@@ -3,7 +3,7 @@
 import os
 import pickle
 from datetime import datetime
-def guardar_resultados_raw(df_capac, tareas, timeline, output_dir, ruta_archivo_base):
+def guardar_resultados_raw(df_capac, tareas, timeline, resumen_pedidos, output_dir, ruta_archivo_base):
     raw_dir = os.path.join(output_dir, "raw")
     os.makedirs(raw_dir, exist_ok=True)
 
@@ -16,7 +16,8 @@ def guardar_resultados_raw(df_capac, tareas, timeline, output_dir, ruta_archivo_
         pickle.dump({
             "capacidades": df_capac,
             "tareas": tareas,
-            "timeline": timeline
+            "timeline": timeline,
+            "resumen_pedidos": resumen_pedidos  # 👈 se guarda también
         }, f)
 
     print(f"\n✅ Resultados crudos guardados correctamente:")
@@ -25,3 +26,6 @@ def guardar_resultados_raw(df_capac, tareas, timeline, output_dir, ruta_archivo_
     print(f"       • capacidades ({len(df_capac)} registros)")
     print(f"       • tareas ({len(tareas)} registros)")
     print(f"       • timeline ({len(timeline)} eventos)")
+    if resumen_pedidos:
+        print(f"       • resumen_pedidos (incluye métricas + dataframe de pedidos)")
+

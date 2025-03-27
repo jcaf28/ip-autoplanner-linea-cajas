@@ -21,6 +21,7 @@ def cargar_y_generar_gantt(path_raw, usar_deprecated=False):
     tareas = datos.get("tareas", [])
     timeline = datos.get("timeline", [])
     capacidades = datos.get("capacidades", [])
+    resumen_pedidos = datos.get("resumen_pedidos", None)
 
     print(f"   • tareas: {len(tareas)} registros")
     print(f"   • timeline: {len(timeline)} eventos")
@@ -31,7 +32,7 @@ def cargar_y_generar_gantt(path_raw, usar_deprecated=False):
         print("⚠️ Modo DEPRECATED activado")
         generar_diagrama_gantt_deprecated(tareas, timeline, capacidades)
     else:
-        generar_diagrama_gantt(tareas, timeline, capacidades)
+        generar_diagrama_gantt(tareas, timeline, capacidades, resumen_pedidos)
 
 def buscar_ultimo_pickle_en(directorio):
     if not os.path.isdir(directorio):
@@ -47,18 +48,16 @@ def buscar_ultimo_pickle_en(directorio):
     return os.path.join(directorio, archivos[0])
 
 if __name__ == "__main__":
-    # Paso 1: Preguntar si se desea usar la versión deprecated
     print("\n🔍 ¿Quieres usar la versión DEPRECATED del Gantt?")
     print("    Pulsa 'd' y ENTER para usarla. Pulsa cualquier otra tecla y ENTER para continuar con la versión nueva.")
     eleccion = input("👉 ")
     usar_deprecated = eleccion.strip().lower() == "d"
 
-    # Paso 2: Seleccionar el archivo .pkl
     if len(sys.argv) > 1:
         path_raw = sys.argv[1]
     else:
         root = tk.Tk()
-        root.withdraw()  # Oculta la ventana principal de Tk
+        root.withdraw()
         path_raw = filedialog.askopenfilename(
             title="Selecciona el archivo .pkl",
             filetypes=[("Pickle files", "*.pkl")],

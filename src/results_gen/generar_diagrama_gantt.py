@@ -1,11 +1,11 @@
 # PATH: src/results_gen/generar_diagrama_gantt.py
 
-import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from collections import defaultdict
+def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
+    import pandas as pd
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    from collections import defaultdict
 
-def generar_diagrama_gantt(tareas, timeline, df_capac):
     map_maq = {
         row["ubicación"]: (row["nom_ubicacion"], int(row["capacidad"]))
         for _, row in df_capac.iterrows()
@@ -68,20 +68,17 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
     y_map = {l: i for i, l in enumerate(y_labels)}
 
     for t in tareas:
-        
         hover_txt = (
             f"🧾 Pedido: {t['pedido']}<br>"
             f"🏭 Máquina: {t['machine']}<br>"
             f"🕒 {t['timestamp_ini']} → {t['timestamp_fin']}<br>"
             f"👷 Operarios: {t['x_op']}<br>"
             f"⏱️ Duración: {t['duration']} min<br>"
-            # -- info adicional --
             f"📅 Entrega requerida: {t['fecha_entrega_requerida']}<br>"
             f"📅 Entrega estimada: {t['fecha_entrega_estimada']}<br>"
             f"⚠️ Retraso (días lab.): {t['retraso_dias_laborales']}<br>"
             f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']}"
         )
-        
         fig.add_trace(go.Bar(
             x=[t["duration"]],
             y=[t["y_label"]],
@@ -101,7 +98,6 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
         title="Ubicación"
     )
 
-    # Subplot de ocupación
     for seg in timeline:
         t_ini = seg["t_ini"]
         t_fin = seg["t_fin"]
@@ -134,17 +130,36 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
             showlegend=False
         ), row=2, col=1)
 
-    fig.update_yaxes(
-        title="Operarios activos",
-        row=2, col=1
-    )
+    fig.update_yaxes(title="Operarios activos", row=2, col=1)
+
+    layout_title = "Planificación: Gantt + Ocupación"
+
+    if resumen_pedidos and isinstance(resumen_pedidos, tuple):
+        resumen_metr, _ = resumen_pedidos
+        texto_metricas = (
+            f"📈 <b>Métricas globales</b><br>"
+            f"• ⏱️ Lead time medio: {resumen_metr['leadtime_medio_dias']:.2f} días<br>"
+            f"• ⚠️ Retraso medio: {resumen_metr['retraso_medio_dias']:.2f} días<br>"
+            f"• 📦 Días entre entregas: {resumen_metr['dias_entre_entregas_prom']:.2f} días"
+        )
+        fig.add_annotation(
+            text=texto_metricas,
+            xref="paper", yref="paper",
+            x=1.02, y=1,
+            showarrow=False,
+            align="left",
+            bordercolor="black",
+            borderwidth=1,
+            bgcolor="white",
+            font=dict(size=12),
+        )
 
     fig.update_layout(
-        title="Planificación: Gantt + Ocupación",
+        title=layout_title,
         barmode="overlay",
         template="plotly_white",
         height=700,
-        width=1100
+        width=1200
     )
 
     fig.show()
