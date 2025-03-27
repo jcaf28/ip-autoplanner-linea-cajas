@@ -1,4 +1,4 @@
-# PATH: the_job_shop_problem.py
+# PATH: carbody_autoplanner.py
 
 from src.model.solver import planificar_linea_produccion
 from src.results_gen.entry import mostrar_resultados

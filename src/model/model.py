@@ -1,3 +1,5 @@
+# PATH: src/model/model.py
+
 from ortools.sat.python import cp_model
 import collections
 import math

@@ -1,3 +1,5 @@
+# PATH: src/model/time_management.py
+
 import pandas as pd
 from datetime import datetime, timedelta
 
@@ -195,3 +197,36 @@ def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
                 t_ini_segmento = t_fin_segmento
 
     return timeline
+
+def calcular_dias_laborables(ts_inicio, ts_fin, df_calend):
+    """
+    Dado dos timestamps (ts_inicio y ts_fin) y el df_calend
+    que contiene los días laborales (una fila por turno/día),
+    devuelve cuántos días laborales hay en ese intervalo.
+    
+    - En este ejemplo se hace un conteo por "día" (sin afinar horas).
+    - Ajusta o sustituye la lógica si requieres mayor precisión 
+      o un cómputo diferente.
+    """
+
+    if ts_inicio > ts_fin:
+        return 0  # por si viene invertido, evitar negativos
+    
+    # Obtenemos solo las fechas (sin hora) dentro de df_calend
+    # que son días laborables (asumimos que si aparecen en df_calend es laborable).
+    df_calend_days = df_calend["dia"].unique()
+    dias_laborables = set(df_calend_days)
+
+    # Convertimos a date para comparar solo días
+    d_ini = ts_inicio.date()
+    d_fin = ts_fin.date()
+
+    # Avanzamos día a día y contamos cuántos están en el set de laborables
+    delta = (d_fin - d_ini).days
+    cuenta = 0
+    for i in range(delta+1):
+        d_actual = d_ini + timedelta(days=i)
+        if d_actual in dias_laborables:
+            cuenta += 1
+
+    return cuenta

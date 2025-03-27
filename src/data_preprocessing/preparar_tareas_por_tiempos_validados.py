@@ -1,4 +1,4 @@
-# PATH: src/prepare/preparar_tareas_por_tiempos_validados.py
+# PATH: src/data_preprocessing/preparar_tareas_por_tiempos_validados.py
 
 import pandas as pd
 

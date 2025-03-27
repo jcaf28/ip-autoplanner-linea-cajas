@@ -68,17 +68,27 @@ def generar_diagrama_gantt(tareas, timeline, df_capac):
     y_map = {l: i for i, l in enumerate(y_labels)}
 
     for t in tareas:
+        
+        hover_txt = (
+            f"🧾 Pedido: {t['pedido']}<br>"
+            f"🏭 Máquina: {t['machine']}<br>"
+            f"🕒 {t['timestamp_ini']} → {t['timestamp_fin']}<br>"
+            f"👷 Operarios: {t['x_op']}<br>"
+            f"⏱️ Duración: {t['duration']} min<br>"
+            # -- info adicional --
+            f"📅 Entrega requerida: {t['fecha_entrega_requerida']}<br>"
+            f"📅 Entrega estimada: {t['fecha_entrega_estimada']}<br>"
+            f"⚠️ Retraso (días lab.): {t['retraso_dias_laborales']}<br>"
+            f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']}"
+        )
+        
         fig.add_trace(go.Bar(
             x=[t["duration"]],
             y=[t["y_label"]],
             base=[t["start"]],
             orientation="h",
             marker=dict(color=t["color"]),
-            hovertext=( f"🧾 Pedido: {t['pedido']}<br>"
-                        f"🏭 Máquina: {t['machine']}<br>"
-                        f"🕒 {t['timestamp_ini']} → {t['timestamp_fin']}<br>"
-                        f"👷 Operarios: {t['x_op']}<br>"
-                        f"⏱️ Duración: {t['duration']} min"),
+            hovertext=hover_txt,
             hoverinfo="text",
             showlegend=False
         ), row=1, col=1)
