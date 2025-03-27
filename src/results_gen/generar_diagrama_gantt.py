@@ -146,13 +146,21 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
 
     if resumen_pedidos and isinstance(resumen_pedidos, tuple):
         resumen_metr, _ = resumen_pedidos
+
+        # Determinar el icono de retraso
+        if resumen_metr["retraso_medio_dias"] == 0:
+            icono_retraso = "✅"
+        else:
+            icono_retraso = "⚠️"
+
         texto_metricas = (
             f"📈 <b>Métricas globales</b><br>"
             f"• 🕓 Horas/día laborable: {resumen_metr['horas_laborables_por_dia']:.2f}<br>"
             f"• ⏱️ Lead time medio: {resumen_metr['leadtime_medio_dias']:.2f} días<br>"
-            f"• ⚠️ Retraso medio: {resumen_metr['retraso_medio_dias']:.2f} días<br>"
+            f"• {icono_retraso} Retraso medio: {resumen_metr['retraso_medio_dias']:.2f} días<br>"
             f"• 📦 Días entre entregas: {resumen_metr['dias_entre_entregas_prom']:.2f} días"
         )
+
         fig.add_annotation(
             text=texto_metricas,
             xref="paper", yref="paper",
