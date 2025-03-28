@@ -7,6 +7,46 @@ import pandas as pd
 
 from src.model.time_management import comprimir_tiempo
 
+def anadir_no_solape_distinto_tipo(model, all_vars, job_dict):
+    """
+    Para cada machine_id, tomamos las tareas que caen en él.
+    Si dos tareas tienen distinto tipo_tarea, añadimos la restricción 
+    de que no se solapen en el tiempo: start_i >= end_j OR start_j >= end_i.
+    """
+    import collections
+
+    # Preparamos un diccionario: machine_id -> lista de (pedido, idx, tipo_tarea)
+    machine_tasks = collections.defaultdict(list)
+    for pedido, tasks in job_dict.items():
+        for t_idx, (tid, machine_id, _, _, _, tipo) in enumerate(tasks):
+            machine_tasks[machine_id].append((pedido, t_idx, tipo))
+
+    # Creamos la restricción disyuntiva para cada par con distinto tipo
+    for m_id, lista in machine_tasks.items():
+        n = len(lista)
+        for i in range(n):
+            ped_i, idx_i, tipo_i = lista[i]
+            start_i = all_vars[(ped_i, idx_i)]["start"]
+            end_i   = all_vars[(ped_i, idx_i)]["end"]
+            for j in range(i + 1, n):
+                ped_j, idx_j, tipo_j = lista[j]
+                if tipo_i != tipo_j:
+                    start_j = all_vars[(ped_j, idx_j)]["start"]
+                    end_j   = all_vars[(ped_j, idx_j)]["end"]
+                    
+                    # Creamos dos variables booleanas
+                    b1 = model.NewBoolVar("")
+                    b2 = model.NewBoolVar("")
+                    
+                    # b1 => start_i >= end_j
+                    model.Add(start_i >= end_j).OnlyEnforceIf(b1)
+                    # b2 => start_j >= end_i
+                    model.Add(start_j >= end_i).OnlyEnforceIf(b2)
+                    
+                    # Disyuntiva: o b1 es verdad o b2 es verdad
+                    model.AddBoolOr([b1, b2])
+
+
 def crear_modelo_cp(job_dict,
                     precedences,
                     machine_capacity,
@@ -162,6 +202,9 @@ def crear_modelo_cp(job_dict,
 
     sum_tardiness = model.NewIntVar(0, 1_000_000_000, "sum_tardiness")
     model.Add(sum_tardiness == cp_model.LinearExpr.Sum(tardiness_vars))
+
+    # RESTRICCIÓN: No solapamiento entre tareas de distinto tipo
+    anadir_no_solape_distinto_tipo(model, all_vars, job_dict)
 
     # Makespan (opcional, como criterio secundario)
     makespan = model.NewIntVar(0, horizon, "makespan")
