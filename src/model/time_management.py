@@ -97,7 +97,6 @@ def descomprimir_tiempo(t, df_calend, modo="ini"):
     print(f"⚠️ [WARNING] Tiempo {t} fuera del calendario definido. No se puede descomprimir.")
     return None
 
-
 def comprimir_tiempo(dt, df_calend):
     """
     Convierte una fecha/hora dt a un número de minutos acumulados en df_calend.
@@ -154,7 +153,6 @@ def comprimir_tiempo(dt, df_calend):
 
     # Si dt es posterior al último turno
     return turnos[-1][3]
-
 
 def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
     """
@@ -221,7 +219,6 @@ def construir_timeline_detallado(tareas, intervals, capacity_per_interval):
 
     return timeline
 
-
 def calcular_dias_laborables(ts_inicio, ts_fin, df_calend):
     """
     Devuelve el número decimal de días laborables entre dos timestamps, considerando turnos nocturnos.
@@ -263,7 +260,6 @@ def calcular_dias_laborables(ts_inicio, ts_fin, df_calend):
 
     seg_por_dia = horas_por_dia * 3600
     return round(total_seg_laborales / seg_por_dia, 2)
-
 
 def calcular_promedio_horas_laborables_por_dia(df_calend):
     """
