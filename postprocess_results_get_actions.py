@@ -1,5 +1,3 @@
-# PATH: postprocess_results_get_actions.py
-
 #!/usr/bin/env python3
 """
 postprocess_results_get_actions.py
@@ -7,6 +5,10 @@ postprocess_results_get_actions.py
 Lee un .xlsx producido por el planificador, corrige el decalaje entre `t_idx`
 y `id_interno`, calcula la hoja **Acciones** y crea una copia del archivo con
 nombre `<original>_actions_<timestamp>.xlsx`.
+
+Para esta fase se supone que hay **5 operarios** disponibles en total; la
+columna *Operarios disponibles* mostrará cuántos quedan libres (no negativos)
+y *Ocupación_%* reflejará el porcentaje sobre esos 5.
 
 Requisitos:
     - pandas  >= 1.5
@@ -29,6 +31,7 @@ import pandas as pd
 # ──────────────────────────────────────────────────────────────────────────────
 ACCIONES_SHEET = "Acciones"
 TIMESTAMP_FMT  = "%Y%m%d_%H%M%S"
+OPERARIOS_MAX  = 5                          # ← hard-codeado por ahora
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UTILIDADES DE ENTRADA / SALIDA
@@ -90,15 +93,13 @@ def ajustar_t_idx(plan: pd.DataFrame) -> pd.DataFrame:
     """
     Corrige el decalaje: en versiones actuales `t_idx` empieza en 0
     mientras que `id_interno` empieza en 1.  Se suma +1 a todos los índices
-    para que coincidan.  Deja preparado por si en el futuro ya vinieran
-    alineados.
+    sólo si se detecta necesario.
     """
     plan = plan.copy()
     plan["t_idx"] = plan["t_idx"].astype(int)
 
-    # Detectar automáticamente si existe decalaje (mínimo == 0 y máximos ≠)
     if plan["t_idx"].min() == 0 and (plan["t_idx"] + 1).isin(plan["t_idx"].unique()).sum() == 0:
-        plan["t_idx"] += 1  # aplica +1 sólo si parece necesario
+        plan["t_idx"] += 1
 
     return plan
 
@@ -123,9 +124,9 @@ def generar_eventos(plan: pd.DataFrame) -> pd.DataFrame:
     eventos_ini["tipo"] = "INICIO"
     eventos_fin["tipo"] = "FINAL"
 
-    eventos = pd.concat([eventos_fin, eventos_ini])      # ⬅ FINAL antes que INICIO (libera mano-de-obra)
+    eventos = pd.concat([eventos_fin, eventos_ini])          # FINAL antes que INICIO
     eventos["timestamp"] = pd.to_datetime(eventos["timestamp"])
-    eventos.sort_values(["timestamp", "tipo"], inplace=True)  # 'FINAL' < 'INICIO' alfabéticamente
+    eventos.sort_values(["timestamp", "tipo"], inplace=True) # 'FINAL' < 'INICIO'
     eventos.reset_index(drop=True, inplace=True)
     return eventos
 
@@ -142,32 +143,29 @@ def construir_acciones(
     Itera eventos secuencialmente, actualizando la ocupación por ubicación y
     construyendo la tabla Acciones.
     """
-    # Preparar mappings rápidos
     tareas_idx = tareas.set_index("id_interno")
     cap_idx    = capacidades.set_index("ubicación")
 
-    ubic_cols       = cap_idx["nom_ubicacion"].tolist()
-    capacidad_total = cap_idx["capacidad"].sum()
-    ocupacion_loc   = {u: 0 for u in cap_idx.index}      # estado mutable
+    ubic_cols     = cap_idx["nom_ubicacion"].tolist()
+    ocupacion_loc = {u: 0 for u in cap_idx.index}          # estado mutable
 
     filas = []
     for _, ev in eventos.iterrows():
         try:
             t_row = tareas_idx.loc[int(ev.t_idx)]
         except KeyError:
-            # Por robustez: fallback posicional si no existe la clave
-            t_row = tareas.iloc[int(ev.t_idx) - 1]
+            t_row = tareas.iloc[int(ev.t_idx) - 1]         # fallback
 
-        ubi_id             = t_row["ubicación"]
-        ubi_nombre         = t_row["nom_ubicacion"]
-        delta              = ev.x_op if ev.tipo == "INICIO" else -ev.x_op
+        ubi_id     = t_row["ubicación"]
+        ubi_nombre = t_row["nom_ubicacion"]
+        delta      = ev.x_op if ev.tipo == "INICIO" else -ev.x_op
         ocupacion_loc[ubi_id] += delta
 
-        ocupados_totales   = sum(ocupacion_loc.values())
-        disponibles        = capacidad_total - ocupados_totales
-        porcentaje_ocup    = round(100 * ocupados_totales / capacidad_total, 2)
+        ocupados_totales = sum(ocupacion_loc.values())
+        disponibles      = max(OPERARIOS_MAX - ocupados_totales, 0)
+        porcentaje_ocup  = round(100 * ocupados_totales / OPERARIOS_MAX, 2)
 
-        accion_palabra     = "iniciar" if ev.tipo == "INICIO" else "terminar"
+        accion_palabra = "iniciar" if ev.tipo == "INICIO" else "terminar"
         frase = (
             f'{accion_palabra} tarea {t_row["tipo_tarea"].lower()} '
             f'"{t_row["descripcion"]}" '
@@ -175,13 +173,13 @@ def construir_acciones(
         )
 
         fila = {
-            "Timestamp":           ev.timestamp,
-            "Tipo_accion":         ev.tipo,
-            "Acción":              frase,
-            "Pedido_involucrado":  ev.pedido,
+            "Timestamp":             ev.timestamp,
+            "Tipo_accion":           ev.tipo,
+            "Acción":                frase,
+            "Pedido_involucrado":    ev.pedido,
             "Operarios disponibles": disponibles,
-            "Operarios ocupados":  ocupados_totales,
-            "Ocupación_%":         porcentaje_ocup,
+            "Operarios ocupados":    ocupados_totales,
+            "Ocupación_%":           porcentaje_ocup,
         }
         # Añadir ocupación por ubicación
         for uid, nombre in zip(cap_idx.index, ubic_cols):
@@ -198,20 +196,19 @@ def construir_acciones(
 # PUNTO DE ENTRADA
 # ──────────────────────────────────────────────────────────────────────────────
 def main() -> None:
-    ruta_excel       = seleccionar_excel()
-    hojas_orig       = cargar_hojas(ruta_excel)
+    ruta_excel     = seleccionar_excel()
+    hojas_orig     = cargar_hojas(ruta_excel)
 
-    capacidades_df   = hojas_orig["Capacidades"]
-    plan_df          = ajustar_t_idx(hojas_orig["Planificación tareas"])
-    tareas_df        = hojas_orig["TAREAS"]
+    capacidades_df = hojas_orig["Capacidades"]
+    plan_df        = ajustar_t_idx(hojas_orig["Planificación tareas"])
+    tareas_df      = hojas_orig["TAREAS"]
 
-    eventos_df       = generar_eventos(plan_df)
-    acciones_df      = construir_acciones(eventos_df, tareas_df, capacidades_df)
+    eventos_df     = generar_eventos(plan_df)
+    acciones_df    = construir_acciones(eventos_df, tareas_df, capacidades_df)
 
-    ruta_salida      = guardar_excel(ruta_excel, hojas_orig, acciones_df)
+    ruta_salida    = guardar_excel(ruta_excel, hojas_orig, acciones_df)
     print(f"✅  Hoja '{ACCIONES_SHEET}' generada correctamente → {ruta_salida}")
 
 
 if __name__ == "__main__":
     main()
-
