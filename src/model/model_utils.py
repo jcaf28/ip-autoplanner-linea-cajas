@@ -1,3 +1,5 @@
+# PATH: src/model/model_utils.py
+
 import math
 
 def estimar_horizonte(job_dict):
