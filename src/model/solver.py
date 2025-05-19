@@ -7,7 +7,7 @@ from src.model.time_management import comprimir_calendario
 from src.model.data_processing import leer_datos, construir_estructura_tareas
 from src.model.results_postprocessing import extraer_solucion
 
-def planificar_linea_produccion(ruta_excel, debug=False):
+def planificar_linea_produccion(ruta_excel, modo_debug=False):
     datos = leer_datos(ruta_excel)
     df_tareas   = datos["df_tareas"]
     df_capac    = datos["df_capac"]
@@ -21,7 +21,7 @@ def planificar_linea_produccion(ruta_excel, debug=False):
     job_dict = {k: v for k, v in job_dict.items() if k in referencias_validas}
     precedences = {k: v for k, v in precedences.items() if k in referencias_validas}
 
-    model, all_vars = crear_modelo_cp(job_dict,
+    model, all_vars, material_reception_vars = crear_modelo_cp(job_dict,
                                       precedences,
                                       machine_cap,
                                       intervals,
@@ -29,10 +29,10 @@ def planificar_linea_produccion(ruta_excel, debug=False):
                                       df_entregas,
                                       df_calend)
 
-    solver, status = resolver_modelo(model, debug)
+    solver, status = resolver_modelo(model, modo_debug)
 
     sol_tareas, timeline, resumen_pedidos = extraer_solucion(
-        solver, status, all_vars, intervals, cap_int, df_calend, df_entregas
+        solver, status, all_vars, intervals, cap_int, df_calend, df_entregas, material_reception_vars
     )
 
     return sol_tareas, timeline, df_capac, resumen_pedidos

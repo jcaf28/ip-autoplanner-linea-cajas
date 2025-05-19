@@ -51,11 +51,11 @@ def crear_modelo_cp(job_dict,
     add_precedences(model, all_vars, precedences)
     add_machine_capacity(model, machine_to_intervals, machine_capacity)
     add_operarios_capacity(model, all_vars, intervals, capacity_per_interval)
-    add_material_reception_limits(model, all_vars, job_dict, precedences, df_calend, ent_dict)
+    material_reception_vars = add_material_reception_limits(model, all_vars, job_dict, precedences, df_calend, ent_dict, horizon)
     add_no_solapamiento_distinto_tipo(model, all_vars, job_dict)
     
     # 5) Añadimos la función objetivo
-    add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_calend, ent_dict, horizon)
+    add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_calend, ent_dict, horizon, material_reception_vars)
 
-    return model, all_vars
+    return model, all_vars, material_reception_vars
 

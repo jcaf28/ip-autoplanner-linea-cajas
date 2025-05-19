@@ -62,21 +62,40 @@ def add_operarios_capacity(model, all_vars, intervals, capacity_per_interval):
 
         model.AddCumulative(interval_list, demands, cap_i)
 
-def add_material_reception_limits(model, all_vars, job_dict, precedences, df_calend, ent_dict):
+def add_material_reception_limits(model, all_vars, job_dict, precedences, df_calend, ent_dict, horizon):
     """
-    No iniciar las tareas sin predecesoras antes de la fecha_recepcion_materiales
+    Restricciones para fechas de recepción de materiales:
+    - Si está especificada: se usa como límite inferior (no empezar antes)
+    - Si no está especificada: se crea variable para determinarla
     """
+    material_reception_vars = {}  # Para almacenar variables de recepción
+    
     for pedido, tasks in job_dict.items():
-        fecha_recep = ent_dict[pedido]["fecha_recepcion"]
-        recep_min = comprimir_tiempo(fecha_recep, df_calend)
-
         precs_pedido = precedences.get(pedido, [])
         indices_con_predecesor = set(idxB for (idxA, idxB) in precs_pedido)
-
-        for t_idx in range(len(tasks)):
-            if t_idx not in indices_con_predecesor:
-                st_var = all_vars[(pedido, t_idx)]["start"]
-                model.Add(st_var >= recep_min)
+        tareas_iniciales = [t_idx for t_idx in range(len(tasks)) if t_idx not in indices_con_predecesor]
+        
+        # Lista para almacenar los tiempos de inicio de tareas iniciales
+        start_vars_iniciales = [all_vars[(pedido, t_idx)]["start"] for t_idx in tareas_iniciales]
+        
+        # Determinar el tiempo mínimo de inicio para este pedido
+        min_start_var = model.NewIntVar(0, horizon, f"min_start_{pedido}")
+        if start_vars_iniciales:
+            model.AddMinEquality(min_start_var, start_vars_iniciales)
+        else:
+            # Si no hay tareas iniciales, usar la primera tarea
+            model.Add(min_start_var == all_vars[(pedido, 0)]["start"])
+        
+        # Almacenar la variable de tiempo mínimo para su uso en extraer_solucion
+        material_reception_vars[pedido] = min_start_var
+        
+        if ent_dict[pedido]["recepcion_especificada"]:
+            # Caso 1: Fecha de recepción especificada - restricción fija
+            fecha_recep = ent_dict[pedido]["fecha_recepcion"]
+            recep_min = comprimir_tiempo(fecha_recep, df_calend)
+            model.Add(min_start_var >= recep_min)
+    
+    return material_reception_vars
 
 def add_no_solapamiento_distinto_tipo(model, all_vars, job_dict):
     """
@@ -108,9 +127,9 @@ def add_no_solapamiento_distinto_tipo(model, all_vars, job_dict):
                     model.Add(s_j >= e_i).OnlyEnforceIf(b2)
                     model.AddBoolOr([b1, b2])
 
-def add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_calend, ent_dict, horizon):
+def add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_calend, ent_dict, horizon, material_reception_vars=None):
     """
-    Minimizar 10 * sum_tardiness + makespan
+    Minimizar 10000 * sum_tardiness + 10 * makespan - material_reception
     """
     tardiness_vars = []
     all_ends = []
@@ -120,7 +139,7 @@ def add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_
 
     pesos = {}
     for ref, val in ent_dict.items():
-        dias_restantes = (val["fecha_entrega"] - fecha_min).days
+        dias_restantes = (val["fecha_entrega"] - fecha_min).days if pd.notna(val["fecha_entrega"]) else 0
         pesos[ref] = max(1, 1000 - dias_restantes)
 
     for pedido, tasks in job_dict.items():
@@ -141,6 +160,7 @@ def add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_
 
         tardiness = model.NewIntVar(0, 10_000_000, f"tardiness_{pedido}")
         model.Add(tardiness >= pedido_end_var - due_min)
+        model.Add(tardiness >= 0)  # Asegurar que tardiness no sea negativo
 
         weighted = model.NewIntVar(0, 100_000_000, f"weighted_tardiness_{pedido}")
         model.AddMultiplicationEquality(weighted, [tardiness, pesos[pedido]])
@@ -152,4 +172,15 @@ def add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_
     makespan = model.NewIntVar(0, horizon, "makespan")
     model.AddMaxEquality(makespan, all_ends)
 
-    model.Minimize(10 * sum_tardiness + makespan)
+    # 1. Alta prioridad: Minimizar tardiness (entregas a tiempo)
+    # 2. Media prioridad: Minimizar makespan
+    # 3. Baja prioridad: Maximizar fechas de recepción (lo más tarde posible)
+    if material_reception_vars:
+        # Suma de todas las variables de recepción de materiales
+        recep_sum = model.NewIntVar(0, horizon * len(material_reception_vars), "recep_sum")
+        model.Add(recep_sum == cp_model.LinearExpr.Sum(material_reception_vars.values()))
+        
+        # En la minimización, restamos recep_sum para maximizarlo
+        model.Minimize(10000 * sum_tardiness + 10 * makespan - recep_sum)
+    else:
+        model.Minimize(10000 * sum_tardiness + 10 * makespan)

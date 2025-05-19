@@ -8,13 +8,14 @@ from src.model.time_management import ( descomprimir_tiempo,
                                         calcular_dias_laborables,
                                         calcular_promedio_horas_laborables_por_dia)
 
-def extraer_solucion( solver, 
+def extraer_solucion(solver, 
                       status, 
                       all_vars, 
                       intervals, 
                       capacity_per_interval, 
                       df_calend,
-                      df_entregas):
+                      df_entregas,
+                      material_reception_vars=None):
     if status not in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
         print("⚠️ No se encontró solución factible u óptima")
         return [], [], None
@@ -66,18 +67,31 @@ def extraer_solucion( solver,
             "fecha_final":      None,
             "fecha_requerida":  None,
             "fecha_materiales": None,
+            "fecha_materiales_calculada": None,
+            "recepcion_especificada": False,
             "delta_entrega_laboral": 0.0,
-            "leadtime_laboral": 0.0
+            "leadtime_laboral": 0.0,
+            "holgura_dias": 0.0  # Nueva métrica: tiempo de holgura
         }
 
     for _, row in df_ent.iterrows():
         ped = row["pedido"]
         if ped in info_pedidos:
-            info_pedidos[ped]["fecha_requerida"]  = row["fecha_entrega_req"]  # Timestamp (o NaT)
-            info_pedidos[ped]["fecha_materiales"] = row["fecha_mat"]          # Timestamp (o NaT)
+            info_pedidos[ped]["fecha_requerida"] = row["fecha_entrega_req"]
+            info_pedidos[ped]["fecha_materiales"] = row["fecha_mat"]
+            info_pedidos[ped]["recepcion_especificada"] = pd.notna(row["fecha_mat"])
 
     ############################################
-    # 2) Armar max_fin_by_pedido
+    # 2) Extraer fechas de recepción calculadas
+    if material_reception_vars:
+        for ped, var in material_reception_vars.items():
+            if ped in info_pedidos:
+                min_start_value = solver.Value(var)
+                ts_recepcion = descomprimir_tiempo(min_start_value, df_calend, modo="ini")
+                info_pedidos[ped]["fecha_materiales_calculada"] = ts_recepcion
+
+    ############################################
+    # 3) Armar max_fin_by_pedido
     from collections import defaultdict
     max_fin_by_pedido = defaultdict(lambda: None)
     for t in sol_tareas:
@@ -93,13 +107,17 @@ def extraer_solucion( solver,
                 max_fin_by_pedido[p] = tsf
 
     ############################################
-    # 3) Calcular retraso/adelanto y lead time
+    # 4) Calcular retraso/adelanto, lead time y holgura
     for ped in info_pedidos:
         fin = max_fin_by_pedido.get(ped)
         info_pedidos[ped]["fecha_final"] = fin
 
         fecha_req = info_pedidos[ped].get("fecha_requerida")   # pd.Timestamp o NaT
-        fecha_mat = info_pedidos[ped].get("fecha_materiales")  # pd.Timestamp o NaT
+        
+        # Determinar la fecha de materiales a utilizar (especificada o calculada)
+        fecha_mat_especificada = info_pedidos[ped].get("fecha_materiales")
+        fecha_mat_calculada = info_pedidos[ped].get("fecha_materiales_calculada")
+        fecha_mat = fecha_mat_especificada if pd.notna(fecha_mat_especificada) else fecha_mat_calculada
 
         if pd.notnull(fecha_req) and pd.notnull(fin):
             # fin < req => adelanto, fin > req => retraso
@@ -117,29 +135,50 @@ def extraer_solucion( solver,
             if isinstance(lt_val, tuple):
                 lt_val = lt_val[0]
             info_pedidos[ped]["leadtime_laboral"] = round(lt_val, 2)
+        
+        # Calcular holgura: días entre la fecha de recepción calculada y la especificada
+        if pd.notnull(fecha_mat_especificada) and pd.notnull(fecha_mat_calculada):
+            if fecha_mat_calculada > fecha_mat_especificada:
+                # No hay holgura, fechas incompatibles
+                info_pedidos[ped]["holgura_dias"] = -1.0
+            else:
+                holgura = calcular_dias_laborables(fecha_mat_calculada, fecha_mat_especificada, df_calend)
+                if isinstance(holgura, tuple):
+                    holgura = holgura[0]
+                info_pedidos[ped]["holgura_dias"] = round(holgura, 2)
 
     ############################################
-    # 4) Inyectar estos datos en sol_tareas
+    # 5) Inyectar estos datos en sol_tareas
     for t in sol_tareas:
         ped = t["pedido"]
         info = info_pedidos[ped]
-        t["fecha_entrega_requerida"]       = info["fecha_requerida"]
-        t["fecha_entrega_estimada"]        = info["fecha_final"]
-        t["delta_entrega_dias_laborales"]  = info["delta_entrega_laboral"]
-        t["leadtime_dias_laborales"]       = info["leadtime_laboral"]
+        t["fecha_entrega_requerida"] = info["fecha_requerida"]
+        t["fecha_entrega_estimada"] = info["fecha_final"]
+        t["fecha_materiales"] = info["fecha_materiales"]
+        t["fecha_materiales_calculada"] = info["fecha_materiales_calculada"]
+        t["recepcion_especificada"] = info["recepcion_especificada"]
+        t["delta_entrega_dias_laborales"] = info["delta_entrega_laboral"]
+        t["leadtime_dias_laborales"] = info["leadtime_laboral"]
+        t["holgura_dias"] = info["holgura_dias"]
+
     retrasos = []
     leadtimes = []
+    holguras = []
     fechas_fin = []
+    
     for ped, vals in info_pedidos.items():
         delta = vals["delta_entrega_laboral"]
         if delta > 0:
             retrasos.append(delta)
         leadtimes.append(vals["leadtime_laboral"])
+        if vals["holgura_dias"] >= 0:
+            holguras.append(vals["holgura_dias"])
         if vals["fecha_final"] is not None:
             fechas_fin.append(vals["fecha_final"])
 
     retraso_medio = sum(retrasos)/len(retrasos) if len(retrasos) > 0 else 0.0
     leadtime_medio = sum(leadtimes)/len(leadtimes) if len(leadtimes) > 0 else 0.0
+    holgura_media = sum(holguras)/len(holguras) if len(holguras) > 0 else 0.0
 
     fechas_fin.sort()
     if len(fechas_fin) <= 1:
@@ -158,6 +197,7 @@ def extraer_solucion( solver,
     resumen_metr = {
         "retraso_medio_dias": round(retraso_medio, 2),
         "leadtime_medio_dias": round(leadtime_medio, 2),
+        "holgura_media_dias": round(holgura_media, 2),
         "dias_entre_entregas_prom": round(dias_entre_entregas_prom, 2),
         "horas_laborables_por_dia": horas_x_dia
     }

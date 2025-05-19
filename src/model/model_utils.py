@@ -1,6 +1,7 @@
 # PATH: src/model/model_utils.py
 
 import math
+import pandas as pd
 
 def estimar_horizonte(job_dict):
     """
@@ -14,15 +15,21 @@ def estimar_horizonte(job_dict):
 
 def construir_diccionario_entregas(df_entregas):
     """
-    Crea un diccionario: referencia -> {fecha_recepcion, fecha_entrega}
+    Crea un diccionario: referencia -> {fecha_recepcion, fecha_entrega, recepcion_especificada}
     para fácil acceso en las restricciones.
     """
     ent_dict = {}
     for _, row in df_entregas.iterrows():
         ref = str(row["referencia"])
+        fecha_recep = row["fecha_recepcion_materiales"]
+        
+        # Determinar si la fecha de recepción es especificada o debe calcularse
+        recepcion_especificada = pd.notna(fecha_recep)
+        
         ent_dict[ref] = {
-            "fecha_recepcion": row["fecha_recepcion_materiales"],
-            "fecha_entrega":   row["fecha_entrega"]
+            "fecha_recepcion": fecha_recep if recepcion_especificada else None,
+            "fecha_entrega": row["fecha_entrega"],
+            "recepcion_especificada": recepcion_especificada
         }
     return ent_dict
 

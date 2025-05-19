@@ -77,6 +77,21 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
             diff_text = f"⚠️ Retraso: {delta:.2f} días"
         else:
             diff_text = f"= Sin retraso"
+        
+        # Información de fechas de recepción
+        recep_info = ""
+        if t.get("recepcion_especificada", False):
+            recep_info = f"📅 Recepción material: {t.get('fecha_materiales')}"
+        else:
+            recep_info = f"📅 Recepción material calculada: {t.get('fecha_materiales_calculada')}"
+        
+        # Información de holgura
+        holgura_info = ""
+        holgura = t.get("holgura_dias", -1)
+        if holgura >= 0:
+            holgura_info = f"⌛ Holgura: {holgura:.2f} días"
+        elif holgura == -1 and t.get("recepcion_especificada", False):
+            holgura_info = "⚠️ Recepción material incompatible con plazo entrega"
 
         hover_txt = (
             f"🧾 Pedido: {t['pedido']}<br>"
@@ -84,10 +99,12 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
             f"🕒 {t['timestamp_ini']} → {t['timestamp_fin']}<br>"
             f"👷 Operarios: {t['x_op']}<br>"
             f"⏱️ Duración: {t['duration']} min<br>"
+            f"{recep_info}<br>"
             f"📅 Entrega requerida: {t['fecha_entrega_requerida']}<br>"
             f"📅 Entrega estimada: {t['fecha_entrega_estimada']}<br>"
             f"{diff_text}<br>"
-            f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']:.2f}"
+            f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']:.2f}<br>"
+            f"{holgura_info}"
         )
         fig.add_trace(go.Bar(
             x=[t["duration"]],
@@ -158,6 +175,7 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
             f"• 🕓 Horas/día laborable: {resumen_metr['horas_laborables_por_dia']:.2f}<br>"
             f"• ⏱️ Lead time medio: {resumen_metr['leadtime_medio_dias']:.2f} días<br>"
             f"• {icono_retraso} Retraso medio: {resumen_metr['retraso_medio_dias']:.2f} días<br>"
+            f"• ⌛ Holgura media: {resumen_metr.get('holgura_media_dias', 0):.2f} días<br>"
             f"• 📦 Días entre entregas: {resumen_metr['dias_entre_entregas_prom']:.2f} días"
         )
 

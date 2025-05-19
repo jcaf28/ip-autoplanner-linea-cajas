@@ -28,16 +28,43 @@ def exportar_resultados_excel(capacidades, tareas, timeline, resumen_pedidos, ou
         df_tareas.to_excel(writer, sheet_name="Tareas", index=False)
         df_timeline.to_excel(writer, sheet_name="Timeline", index=False)
         df_capacidades.to_excel(writer, sheet_name="Capacidades", index=False)
+        
         if resumen_pedidos and isinstance(resumen_pedidos, tuple):
             resumen_metr, df_pedidos = resumen_pedidos
             df_metrics.to_excel(writer, sheet_name="Métricas_globales", index=False)
-            df_pedidos.to_excel(writer, sheet_name="Pedidos", index=True)
+            
+            # Mejorar el formato de la hoja de Pedidos
+            workbook = writer.book
+            
+            # Formato para fechas
+            fecha_format = workbook.add_format({'num_format': 'dd/mm/yyyy hh:mm'})
+            
+            # Crear una hoja mejorada de pedidos
+            df_pedidos.reset_index(inplace=True)
+            df_pedidos.rename(columns={'index': 'pedido'}, inplace=True)
+            
+            # Ordenar las columnas para mejor visualización
+            cols_ordenadas = ['pedido', 'fecha_requerida', 'fecha_final', 
+                             'fecha_materiales', 'fecha_materiales_calculada',
+                             'recepcion_especificada', 'delta_entrega_laboral', 
+                             'leadtime_laboral', 'holgura_dias']
+            
+            # Usar solo columnas que existen
+            cols_a_usar = [c for c in cols_ordenadas if c in df_pedidos.columns]
+            
+            df_pedidos = df_pedidos[cols_a_usar]
+            df_pedidos.to_excel(writer, sheet_name="Pedidos", index=False)
+            
+            # Aplicar formato a columnas de fecha
+            worksheet = writer.sheets["Pedidos"]
+            for col_idx, col_name in enumerate(df_pedidos.columns):
+                if 'fecha' in col_name:
+                    worksheet.set_column(col_idx, col_idx, 20, fecha_format)
 
     print(f"\n📁 Solución exportada a: {ruta_salida}")
 
     if open_file_location:
         abrir_explorador(output_dir)
-
 
 
 def abrir_explorador(path):

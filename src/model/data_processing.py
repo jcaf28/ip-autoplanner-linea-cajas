@@ -10,8 +10,9 @@ def leer_datos(ruta_excel):
     df_tareas   = pd.read_excel(xls, sheet_name="TAREAS")
     df_capac    = pd.read_excel(xls, sheet_name="CAPACIDADES")
 
+    # Convertir fechas, dejando NaT para fechas no especificadas
     df_entregas["fecha_entrega"] = pd.to_datetime(df_entregas["fecha_entrega"], dayfirst=True)
-    df_entregas["fecha_recepcion_materiales"] = pd.to_datetime(df_entregas["fecha_recepcion_materiales"], dayfirst=True)
+    df_entregas["fecha_recepcion_materiales"] = pd.to_datetime(df_entregas["fecha_recepcion_materiales"], dayfirst=True, errors='coerce')
     df_calend["dia"] = pd.to_datetime(df_calend["dia"]).dt.date
 
     # Rellenar NaN numéricos en df_tareas

@@ -100,14 +100,15 @@ def descomprimir_tiempo(t, df_calend, modo="ini"):
 def comprimir_tiempo(dt, df_calend):
     """
     Convierte una fecha/hora dt a un número de minutos acumulados en df_calend.
+    Si dt es None o NaT, devuelve 0.
     Si dt cae antes del primer turno => 0.
     Si dt cae entre turnos => sumamos la parte previa más la parte parcial del turno.
     Si dt está después del último turno => el total acumulado.
-    
-    Nota: Si el turno cruza medianoche, habría que duplicar la misma lógica
-    que en comprimir_calendario (sumar 1 día). 
-    Si no, se asume que no hay problemas o ya se corrigió en df_calend.
     """
+    # Protección contra valores nulos
+    if dt is None or pd.isna(dt):
+        return 0
+        
     dfc = df_calend.copy()
     dfc["dia"] = pd.to_datetime(dfc["dia"]).dt.date
     dfc["hora_inicio"] = pd.to_datetime(dfc["hora_inicio"], format="%H:%M:%S").dt.time
