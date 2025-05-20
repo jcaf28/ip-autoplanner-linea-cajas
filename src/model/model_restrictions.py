@@ -178,8 +178,7 @@ def add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_
     if material_reception_vars:
         # Suma de todas las variables de recepción de materiales
         recep_sum = model.NewIntVar(0, horizon * len(material_reception_vars), "recep_sum")
-        model.Add(recep_sum == cp_model.LinearExpr.Sum(material_reception_vars.values()))
-        
+        model.Add(recep_sum == cp_model.LinearExpr.Sum(list(material_reception_vars.values())))        
         # En la minimización, restamos recep_sum para maximizarlo
         model.Minimize(10000 * sum_tardiness + 10 * makespan - recep_sum)
     else:
