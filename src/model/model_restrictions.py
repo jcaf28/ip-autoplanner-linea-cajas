@@ -4,6 +4,14 @@ from ortools.sat.python import cp_model
 
 from src.model.time_management import comprimir_tiempo
 
+from src.model.params import (
+    DIAS_LABORABLES_ANTICIPACION,
+    DIAS_LABORABLES_MINIMOS,
+    PESO_TARDINESS,
+    PESO_MAKESPAN,
+    PESO_RECEPCION
+)
+
 def add_precedences(model, all_vars, precedences):
     """
     each (idxA, idxB) => startB >= endA
@@ -66,9 +74,13 @@ def add_material_reception_limits(model, all_vars, job_dict, precedences, df_cal
     """
     Restricciones para fechas de recepción de materiales:
     - Si está especificada: se usa como límite inferior (no empezar antes)
-    - Si no está especificada: se crea variable para determinarla
+    - Si no está especificada: se crea variable para determinarla basada en el warm start
     """
+    import pandas as pd
     material_reception_vars = {}  # Para almacenar variables de recepción
+    
+    # Para calcular días laborables entre fechas
+    from src.model.time_management import calcular_dias_laborables
     
     for pedido, tasks in job_dict.items():
         precs_pedido = precedences.get(pedido, [])
@@ -94,6 +106,72 @@ def add_material_reception_limits(model, all_vars, job_dict, precedences, df_cal
             fecha_recep = ent_dict[pedido]["fecha_recepcion"]
             recep_min = comprimir_tiempo(fecha_recep, df_calend)
             model.Add(min_start_var >= recep_min)
+        else:
+            # Caso 2: Fecha NO especificada - implementamos el WARM START
+            fecha_entrega = ent_dict[pedido]["fecha_entrega"]
+            
+            if pd.notna(fecha_entrega):
+                # ========================================================================
+                # WARM START: Estimación de fecha de recepción de materiales
+                # ========================================================================
+                # Aquí se puede ajustar la lógica para estimar cuando deberían llegar 
+                # los materiales en función de las características del pedido
+                
+                # PARÁMETRO CLAVE: Días laborables de anticipación para recepción
+                dias_buffer = DIAS_LABORABLES_ANTICIPACION  # <-- WARM START PRINCIPAL
+                
+                # Calcular la fecha estimada para recepción de materiales
+                # Este cálculo podría ser más complejo, basado en la complejidad del pedido
+                
+                # Versión simple: restar días naturales
+                # fecha_est = fecha_entrega - pd.Timedelta(days=dias_buffer)
+                
+                # Versión avanzada: calcular días laborables hacia atrás
+                # Creamos una fecha tentativa suficientemente anterior
+                fecha_tentativa = fecha_entrega - pd.Timedelta(days=dias_buffer * 2)
+                dias_lab_actuales = calcular_dias_laborables(fecha_tentativa, fecha_entrega, df_calend)
+                if isinstance(dias_lab_actuales, tuple):
+                    dias_lab_actuales = dias_lab_actuales[0]
+                
+                # Ajustar iterativamente para acercarnos a los días laborables deseados
+                # En un entorno de producción, este cálculo podría optimizarse
+                while dias_lab_actuales > dias_buffer + 1:
+                    fecha_tentativa = fecha_tentativa + pd.Timedelta(days=1)
+                    dias_lab_actuales = calcular_dias_laborables(fecha_tentativa, fecha_entrega, df_calend)
+                    if isinstance(dias_lab_actuales, tuple):
+                        dias_lab_actuales = dias_lab_actuales[0]
+                
+                fecha_est = fecha_tentativa  # Esta es nuestra estimación para el warm start
+                
+                # Límite superior: no empezar muy cerca de la fecha de entrega
+                dias_minimos = DIAS_LABORABLES_MINIMOS  # <-- RESTRICCIÓN DE TIEMPO MÍNIMO
+                
+                # Similar a lo anterior, calculamos la fecha límite en días laborables
+                fecha_limite_tentativa = fecha_entrega - pd.Timedelta(days=dias_minimos * 2)
+                dias_hasta_entrega = calcular_dias_laborables(fecha_limite_tentativa, fecha_entrega, df_calend)
+                if isinstance(dias_hasta_entrega, tuple):
+                    dias_hasta_entrega = dias_hasta_entrega[0]
+                
+                while dias_hasta_entrega > dias_minimos + 1:
+                    fecha_limite_tentativa = fecha_limite_tentativa + pd.Timedelta(days=1)
+                    dias_hasta_entrega = calcular_dias_laborables(fecha_limite_tentativa, fecha_entrega, df_calend)
+                    if isinstance(dias_hasta_entrega, tuple):
+                        dias_hasta_entrega = dias_hasta_entrega[0]
+                
+                fecha_limite = fecha_limite_tentativa
+                # ========================================================================
+                
+                # Convertir a minutos comprimidos
+                recep_est = comprimir_tiempo(fecha_est, df_calend)
+                recep_max = comprimir_tiempo(fecha_limite, df_calend)
+                
+                # Dar un valor inicial sugerido (warm start) pero no obligatorio
+                if recep_est > 0:
+                    model.AddHint(min_start_var, recep_est)
+                
+                # Opcional: restringir que no sea después del límite
+                if recep_max > 0:
+                    model.Add(min_start_var <= recep_max)
     
     return material_reception_vars
 
@@ -179,7 +257,13 @@ def add_objective_tardiness_makespan(model, all_vars, job_dict, precedences, df_
         # Suma de todas las variables de recepción de materiales
         recep_sum = model.NewIntVar(0, horizon * len(material_reception_vars), "recep_sum")
         model.Add(recep_sum == cp_model.LinearExpr.Sum(list(material_reception_vars.values())))        
-        # En la minimización, restamos recep_sum para maximizarlo
-        model.Minimize(10000 * sum_tardiness + 10 * makespan - recep_sum)
+        
+        # En la minimización, usamos pesos configurables y PESO_RECEPCION negativo
+        # para maximizar las fechas de recepción (queremos que lleguen lo más tarde posible)
+        model.Minimize(
+            PESO_TARDINESS * sum_tardiness + 
+            PESO_MAKESPAN * makespan + 
+            PESO_RECEPCION * recep_sum
+        )
     else:
-        model.Minimize(10000 * sum_tardiness + 10 * makespan)
+        model.Minimize(PESO_TARDINESS * sum_tardiness + PESO_MAKESPAN * makespan)

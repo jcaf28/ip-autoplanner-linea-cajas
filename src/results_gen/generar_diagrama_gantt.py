@@ -78,20 +78,24 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
         else:
             diff_text = f"= Sin retraso"
         
-        # Información de fechas de recepción
+        # Información de fechas de recepción con referencia al warm start
         recep_info = ""
-        if t.get("recepcion_especificada", False):
-            recep_info = f"📅 Recepción material: {t.get('fecha_materiales')}"
-        else:
-            recep_info = f"📅 Recepción material calculada: {t.get('fecha_materiales_calculada')}"
-        
-        # Información de holgura
         holgura_info = ""
-        holgura = t.get("holgura_dias", -1)
-        if holgura >= 0:
-            holgura_info = f"⌛ Holgura: {holgura:.2f} días"
-        elif holgura == -1 and t.get("recepcion_especificada", False):
-            holgura_info = "⚠️ Recepción material incompatible con plazo entrega"
+        
+        if t.get("recepcion_especificada", False):
+            recep_info = f"📅 Recepción material (especificada): {t.get('fecha_materiales')}"
+            
+            # Si también tenemos fecha calculada, mostrar comparación
+            if t.get("fecha_materiales_calculada") is not None:
+                holgura = t.get("holgura_dias", -1)
+                if holgura >= 0:
+                    holgura_info = f"⌛ Holgura entre fecha calculada y especificada: {holgura:.2f} días"
+                else:
+                    holgura_info = "⚠️ Incompatibilidad: fecha calculada posterior a especificada"
+        else:
+            # Warm start produjo esta fecha calculada
+            recep_info = f"📅 Recepción material (calculada por modelo): {t.get('fecha_materiales_calculada')}"
+            holgura_info = "💡 Esta fecha fue optimizada por el modelo a partir del warm start"
 
         hover_txt = (
             f"🧾 Pedido: {t['pedido']}<br>"
@@ -100,11 +104,11 @@ def generar_diagrama_gantt(tareas, timeline, df_capac, resumen_pedidos=None):
             f"👷 Operarios: {t['x_op']}<br>"
             f"⏱️ Duración: {t['duration']} min<br>"
             f"{recep_info}<br>"
+            f"{holgura_info}<br>"
             f"📅 Entrega requerida: {t['fecha_entrega_requerida']}<br>"
             f"📅 Entrega estimada: {t['fecha_entrega_estimada']}<br>"
             f"{diff_text}<br>"
-            f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']:.2f}<br>"
-            f"{holgura_info}"
+            f"🚀 Lead time (días lab.): {t['leadtime_dias_laborales']:.2f}"
         )
         fig.add_trace(go.Bar(
             x=[t["duration"]],

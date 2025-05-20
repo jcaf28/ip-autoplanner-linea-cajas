@@ -82,13 +82,20 @@ def extraer_solucion(solver,
             info_pedidos[ped]["recepcion_especificada"] = pd.notna(row["fecha_mat"])
 
     ############################################
-    # 2) Extraer fechas de recepción calculadas
+    ############################################
+    # 2) Extraer fechas de recepción calculadas del warm start
+    # Aquí obtenemos los valores calculados por el modelo para comparar con los warm starts
+    ############################################
     if material_reception_vars:
         for ped, var in material_reception_vars.items():
             if ped in info_pedidos:
                 min_start_value = solver.Value(var)
                 ts_recepcion = descomprimir_tiempo(min_start_value, df_calend, modo="ini")
                 info_pedidos[ped]["fecha_materiales_calculada"] = ts_recepcion
+                
+                # Inyectar mensaje de debug si estamos en modo debug
+                if ts_recepcion and info_pedidos[ped]["fecha_materiales"] and ts_recepcion > info_pedidos[ped]["fecha_materiales"]:
+                    print(f"⚠️ [ALERTA] Para pedido '{ped}', fecha calculada ({ts_recepcion}) posterior a especificada ({info_pedidos[ped]['fecha_materiales']})")
 
     ############################################
     # 3) Armar max_fin_by_pedido
@@ -197,7 +204,7 @@ def extraer_solucion(solver,
     resumen_metr = {
         "retraso_medio_dias": round(retraso_medio, 2),
         "leadtime_medio_dias": round(leadtime_medio, 2),
-        "holgura_media_dias": round(holgura_media, 2),
+        "holgura_media_dias": round(holgura_media, 2),  # Diferencia entre warm start y fecha optima
         "dias_entre_entregas_prom": round(dias_entre_entregas_prom, 2),
         "horas_laborables_por_dia": horas_x_dia
     }

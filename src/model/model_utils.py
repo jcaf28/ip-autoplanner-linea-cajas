@@ -18,6 +18,8 @@ def construir_diccionario_entregas(df_entregas):
     Crea un diccionario: referencia -> {fecha_recepcion, fecha_entrega, recepcion_especificada}
     para fácil acceso en las restricciones.
     """
+    import pandas as pd
+    
     ent_dict = {}
     for _, row in df_entregas.iterrows():
         ref = str(row["referencia"])
